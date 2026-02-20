@@ -1,0 +1,62 @@
+"""FastAPI application entry point."""
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.api.routes import admin, conversations, dashboard, health
+from app.core.config import get_settings
+from app.core.gateway import GatewayMiddleware
+from app.core.logging import setup_logging, get_logger
+from app.core.metrics_middleware import MetricsMiddleware
+from app.core.rate_limit import rate_limit_middleware
+from app.core.tracing import setup_tracing
+
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan: startup and shutdown."""
+    setup_logging(json_logs=True, log_level="INFO")
+    logger.info("application_startup")
+    yield
+    logger.info("application_shutdown")
+
+
+def create_app() -> FastAPI:
+    """Create and configure FastAPI application."""
+    settings = get_settings()
+    app = FastAPI(
+        title=settings.app_name,
+        version="1.0.0",
+        lifespan=lifespan,
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.add_middleware(GatewayMiddleware)
+    app.add_middleware(MetricsMiddleware)
+    app.middleware("http")(rate_limit_middleware)
+
+    # Mount routes
+    prefix = settings.api_prefix
+    app.include_router(health.router, prefix=prefix)
+    app.include_router(dashboard.router, prefix=prefix)
+    app.include_router(conversations.router, prefix=prefix)
+    app.include_router(admin.router, prefix=prefix)
+
+    setup_tracing(app)
+
+    return app
+
+
+app = create_app()

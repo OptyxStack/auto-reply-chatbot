@@ -1,0 +1,20 @@
+.env
+.env.*
+!.env.example
+
+.idea/
+
+# Company/proprietary knowledge base - do not commit
+source/*.json
+!source/sample_docs.json
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
