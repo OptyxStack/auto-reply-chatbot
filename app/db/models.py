@@ -41,6 +41,13 @@ class MessageRole(str, Enum):
     SYSTEM = "system"
 
 
+class ConversationSourceType(str, Enum):
+    """Source type for conversation: ticket or livechat."""
+
+    TICKET = "ticket"
+    LIVECHAT = "livechat"
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -86,11 +93,18 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=generate_uuid)
-    external_user_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    source_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, index=True
+    )  # ticket | livechat
+    source_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     conv_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     messages: Mapped[list["Message"]] = relationship("Message", back_populates="conversation", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_conversations_source", "source_type", "source_id"),
+    )
 
 
 class Message(Base):
@@ -102,6 +116,7 @@ class Message(Base):
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    debug_metadata: Mapped[dict | None] = mapped_column("debug_metadata", JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
@@ -160,3 +175,34 @@ class EvalResult(Base):
     pass_: Mapped[bool] = mapped_column("pass", nullable=False)
     metrics: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AppConfig(Base):
+    """Key-value config for prompts and branding (system prompt, fallback messages, etc.)."""
+
+    __tablename__ = "app_config"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=generate_uuid)
+    key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False, index=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Intent(Base):
+    """Intent cache: predefined answers for common queries (who am i, what can you do, etc.)."""
+
+    __tablename__ = "intents"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=generate_uuid)
+    key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    patterns: Mapped[str] = mapped_column(Text, nullable=False)  # regex pattern
+    answer: Mapped[str] = mapped_column(Text, nullable=False)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

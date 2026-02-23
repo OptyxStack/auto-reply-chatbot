@@ -75,6 +75,19 @@ class OpenAIGateway(LLMGateway):
         if cached:
             return cached
 
+        # OpenAI prompt caching: improves cache hit rates for similar prompts
+        extra_params: dict[str, Any] = {k: v for k, v in kwargs.items() if k not in ("model", "timeout")}
+        cache_key = self._settings.llm_prompt_cache_key or f"support_ai:{self._settings.app_name}"
+        extra_params["prompt_cache_key"] = cache_key
+        if self._settings.llm_prompt_cache_retention in ("24h", "in_memory"):
+            extra_params["prompt_cache_retention"] = self._settings.llm_prompt_cache_retention
+
+        def _token_param(m: str) -> dict[str, Any]:
+            """Use max_completion_tokens for o1/gpt-5; max_tokens for older models."""
+            if m.startswith("o1") or m.startswith("gpt-5"):
+                return {"max_completion_tokens": max_tokens}
+            return {"max_tokens": max_tokens}
+
         last_error = None
         for m in models_to_try:
             try:
@@ -82,8 +95,8 @@ class OpenAIGateway(LLMGateway):
                     model=m,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_tokens,
-                    **{k: v for k, v in kwargs.items() if k not in ("model", "timeout")},
+                    **_token_param(m),
+                    **extra_params,
                 )
                 choice = response.choices[0] if response.choices else None
                 if not choice:

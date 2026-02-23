@@ -3,7 +3,7 @@
 !.env.example
 
 .idea/
-
+.history
 # Company/proprietary knowledge base - do not commit
 source/*.json
 !source/sample_docs.json

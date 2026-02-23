@@ -1,4 +1,15 @@
 services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5174:80"
+    depends_on:
+      - api
+    environment:
+      - VITE_API_KEY=${API_KEY:-dev-key}
+
   nginx:
     image: nginx:alpine
     ports:
@@ -11,11 +22,14 @@ services:
       - full
 
   api:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: support-ai-assistant:local
     ports:
       - "8000:8000"
     volumes:
-      - ./source:/app/source:ro
+      - ./source:/app/source
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
@@ -46,7 +60,7 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   worker:
-    build: .
+    image: support-ai-assistant:local
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
@@ -71,7 +85,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: support_ai
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:

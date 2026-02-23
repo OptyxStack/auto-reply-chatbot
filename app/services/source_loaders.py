@@ -149,7 +149,9 @@ LOADERS: dict[str, Any] = {
     "green_cloud_docs_knowledge.json": load_articles_json,
     "greencloudvps_advanced_data.json": load_plans_json,
     "greencloudvps_additional_plans.json": load_plans_json,
+    "greencloudvps_terms_of_service.json": load_pages_json,
     "greencloud_chatbot_master.json": load_sales_kb_json,
+    "custom_docs.json": load_pages_json,
 }
 
 

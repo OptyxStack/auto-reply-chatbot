@@ -47,20 +47,59 @@ class RetrievalService:
         self._embedder = embedding_provider or get_embedding_provider()
         self._reranker = reranker or get_reranker_provider()
 
-    def _query_rewrite(self, query: str) -> QueryRewrite:
-        """Rewrite query: expand plans/pricing queries for better retrieval."""
-        q = query.lower()
-        keyword_query = query
+    def _rewrite_with_conversation(
+        self, query: str, conversation_history: list[dict[str, str]] | None
+    ) -> str:
+        """Rewrite query using conversation context for better retrieval."""
+        if not conversation_history or len(conversation_history) < 2:
+            return query
+        # Build context from last exchange: extract key terms from assistant's prior answer
+        # e.g. User: "VPS plans?" -> Assistant: "We have Pro, Basic..." -> User: "Giá?"
+        # -> "VPS plans Pro Basic giá pricing"
+        context_terms: list[str] = []
+        for m in conversation_history[-4:]:
+            content = (m.get("content") or "").strip()
+            if not content or len(content) > 200:
+                continue
+            # Take first user message as topic anchor
+            if m.get("role") == "user" and len(context_terms) < 3:
+                words = [w for w in content.split() if len(w) > 2][:5]
+                context_terms.extend(words)
+        if context_terms:
+            # Dedupe and combine with current query
+            seen = set()
+            unique = []
+            for t in context_terms:
+                tl = t.lower()
+                if tl not in seen and tl not in query.lower():
+                    seen.add(tl)
+                    unique.append(t)
+            if unique:
+                return f"{' '.join(unique[:3])} {query}".strip()
+        return query
+
+    def _query_rewrite(
+        self, query: str, conversation_history: list[dict[str, str]] | None = None
+    ) -> QueryRewrite:
+        """Rewrite query: conversation context + expand plans/pricing for better retrieval."""
+        # Conversation-aware: add context from prior messages
+        semantic_query = self._rewrite_with_conversation(query, conversation_history)
+        q = semantic_query.lower()
+        keyword_query = semantic_query
         # Expand "VPS plans" type queries for better BM25 hits on pricing docs
-        if any(kw in q for kw in ["plan", "plans", "price", "pricing", "vps", "offer"]):
+        if any(kw in q for kw in ["plan", "plans", "price", "pricing", "vps", "offer", "cost", "giá", "link"]):
             extras = []
-            if "plan" in q or "plans" in q:
-                extras.extend(["pricing", "budget", "windows vps", "kvm vps", "storage"])
-            if "price" in q or "cost" in q:
-                extras.extend(["USD", "monthly", "annually"])
+            if "plan" in q or "plans" in q or "link" in q:
+                extras.extend(["pricing", "budget", "windows vps", "kvm vps", "storage", "order", "store"])
+            if "price" in q or "cost" in q or "giá" in q:
+                extras.extend(["USD", "monthly", "annually", "pricing"])
+            if "refund" in q or "hoàn" in q or "return" in q:
+                extras.extend(["policy", "terms", "30 days"])
+            if "support" in q or "help" in q or "hỗ trợ" in q:
+                extras.extend(["contact", "email", "FAQ"])
             if extras:
-                keyword_query = f"{query} {' '.join(extras[:4])}"
-        return QueryRewrite(keyword_query=keyword_query, semantic_query=query)
+                keyword_query = f"{semantic_query} {' '.join(extras[:4])}"
+        return QueryRewrite(keyword_query=keyword_query, semantic_query=semantic_query)
 
     def _merge_and_dedupe(
         self,
@@ -80,23 +119,25 @@ class RetrievalService:
         top_n: int | None = None,
         top_k: int | None = None,
         doc_types: list[str] | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
     ) -> EvidencePack:
         """Execute hybrid retrieval pipeline."""
         top_n = top_n or self._settings.retrieval_top_n
         top_k = top_k or self._settings.retrieval_top_k
 
-        qr = self._query_rewrite(query)
+        qr = self._query_rewrite(query, conversation_history)
 
         # For plans/pricing queries: fetch more and don't filter by doc_type
         q_lower = query.lower()
-        is_plans_query = any(kw in q_lower for kw in ["plan", "plans", "price", "pricing", "vps", "offer"])
+        is_plans_query = any(kw in q_lower for kw in ["plan", "plans", "price", "pricing", "vps", "offer", "link"])
         fetch_n = min(top_n * 2, 100) if is_plans_query else top_n
 
-        # 1. BM25 from OpenSearch
+        # 1. BM25 from OpenSearch (boost pricing chunks for plan/price queries)
         bm25_chunks = await self._opensearch.search(
             query=qr.keyword_query,
             top_n=fetch_n,
             doc_types=doc_types,
+            boost_pricing=is_plans_query,
         )
 
         # 2. Vector from Qdrant (sync client - run in thread)
@@ -115,6 +156,10 @@ class RetrievalService:
             "bm25_count": len(bm25_chunks),
             "vector_count": len(vector_chunks),
             "merged_count": len(merged),
+            "query_rewrite": {
+                "keyword_query": qr.keyword_query,
+                "semantic_query": qr.semantic_query,
+            },
         }
 
         if not merged:
@@ -124,6 +169,7 @@ class RetrievalService:
                 retrieval_miss_rate.inc()
             except Exception:
                 pass
+            stats["query_rewrite"] = {"keyword_query": qr.keyword_query, "semantic_query": qr.semantic_query}
             return EvidencePack(chunks=[], retrieval_stats=stats)
 
         # 4. Rerank - use more chunks for plans/pricing queries

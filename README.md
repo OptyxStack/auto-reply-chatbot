@@ -38,7 +38,7 @@ For production deployments, [OptyxStack](https://optyxstack.com/) offers [AI opt
 - **Quality gate**: PASS / ASK_USER / RETRIEVE_MORE / ESCALATE (no infinite loops)
 - **Observability**: OpenTelemetry, Prometheus (token cost, retrieval hit-rate, escalation rate, p95 latency)
 - **Object storage**: MinIO for raw docs/artifacts
-- **API-first**: REST API only, no frontend
+- **API-first**: REST API + optional React frontend for CRUD & chat
 
 ## Tech Stack
 
@@ -67,11 +67,14 @@ cp .env.example .env
 
 ### Run with Docker Compose
 
-**Default** (API on port 8000, MinIO on 9000/9001):
+**Default** (API on port 8000, Frontend on port 5174, MinIO on 9000/9001):
 
 ```bash
 docker-compose up -d
 ```
+
+- **API**: http://localhost:8000
+- **Frontend**: http://localhost:5174 (conversation management, chat CRUD)
 
 **With Nginx gateway** (API behind Nginx on port 80):
 
@@ -107,8 +110,11 @@ make ingest
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/v1/conversations` | Create conversation |
+| GET | `/v1/conversations` | List conversations (pagination: `?page=1&page_size=20`, filter: `?source_type=ticket&source_id=...`) |
+| POST | `/v1/conversations` | Create conversation (required: `source_type`, `source_id` – ticket or livechat) |
 | GET | `/v1/conversations/{id}` | Get conversation + messages |
+| PATCH | `/v1/conversations/{id}` | Update conversation metadata |
+| DELETE | `/v1/conversations/{id}` | Delete conversation |
 | POST | `/v1/conversations/{id}/messages` | Send message (sync response) |
 | POST | `/v1/conversations/{id}/messages:stream` | Send message (SSE stream) |
 
@@ -131,12 +137,16 @@ make ingest
 
 ### Create conversation
 
+Each conversation must be linked to a ticket or livechat:
+
 ```bash
 curl -X POST http://localhost:8000/v1/conversations \
   -H "Content-Type: application/json" \
   -H "X-API-Key: dev-key" \
-  -d '{"external_user_id": "user-123", "metadata": {}}'
+  -d '{"source_type": "ticket", "source_id": "TKT-12345", "metadata": {}}'
 ```
+
+`source_type`: `"ticket"` or `"livechat"`
 
 ### Send message
 
@@ -198,6 +208,22 @@ Returns: `{"results": [{"index": 0, "relevance_score": 0.95}, ...]}`
 
 Or use Cohere by setting `RERANKER_PROVIDER=cohere` and `COHERE_API_KEY`.
 
+## Frontend (React)
+
+Conversation management UI with full CRUD:
+
+```bash
+# Run dev (hot reload)
+cd frontend && npm install && npm run dev
+# Open http://localhost:5173
+
+# Or use Docker
+docker-compose up -d frontend
+# Frontend: http://localhost:5174
+```
+
+Features: conversation list (pagination), create/delete, live chat, dashboard metrics.
+
 ## Project Structure
 
 ```
@@ -211,6 +237,7 @@ app/
 worker/
   celery_app.py
   tasks.py             # Ingestion tasks
+frontend/              # React + Vite (CRUD, chat UI)
 alembic/               # Migrations
 ```
 

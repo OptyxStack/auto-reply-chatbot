@@ -31,12 +31,15 @@ async def verify_api_key(
 async def verify_admin_api_key(
     request: Request,
     admin_key: Annotated[str | None, Depends(admin_api_key_header)],
+    api_key: Annotated[str | None, Depends(api_key_header)],
 ) -> str:
-    """Verify admin API key for ingest/admin endpoints."""
+    """Verify admin API key for ingest/admin endpoints.
+    Accepts either X-Admin-API-Key or X-API-Key (dùng chung một key)."""
     settings = get_settings()
     if not settings.admin_api_key:
         return "admin_dev"
-    if admin_key and admin_key == settings.admin_api_key:
+    key = admin_key or api_key
+    if key and (key == settings.admin_api_key or key == settings.api_key):
         return "admin"
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

@@ -1,0 +1,54 @@
+services:
+  frontend:
+    image: node:20
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    environment:
+      - VITE_API_KEY=${API_KEY:-dev-key}
+      - VITE_API_TARGET=http://api:8000
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: support-ai-assistant:dev
+    volumes:
+      - ./:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
+      - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - OPENSEARCH_HOST=http://opensearch:9200
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - API_KEY=${API_KEY:-dev-key}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-admin-key}
+      - OBJECT_STORAGE_URL=http://minio:9000
+      - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - OBJECT_STORAGE_BUCKET=support-ai-docs
+
+  worker:
+    image: support-ai-assistant:dev
+    volumes:
+      - ./:/app
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
+      - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - OPENSEARCH_HOST=http://opensearch:9200
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OBJECT_STORAGE_URL=http://minio:9000
+      - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+      - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+      - OBJECT_STORAGE_BUCKET=support-ai-docs

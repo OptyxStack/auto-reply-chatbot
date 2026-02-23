@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     )
 
     # API
-    app_name: str = "Support AI Assistant"
+    app_name: str = Field(default="GreenCloud", description="Company/app name for branding and cache keys")
     debug: bool = False
     api_prefix: str = "/v1"
 
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # LLM
     llm_provider: Literal["openai", "custom"] = Field(default="openai")
     llm_model: str = Field(default="gpt-5.2", description="LLM model name")
-    llm_temperature: float = Field(default=0.1, ge=0, le=2)
+    llm_temperature: float = Field(default=0.0, ge=0, le=2, description="0 = deterministic, better for accuracy")
 
     # Reranker
     reranker_provider: Literal["local", "cohere", "custom"] = Field(default="local")
@@ -76,8 +76,8 @@ class Settings(BaseSettings):
 
     # Retrieval
     retrieval_top_n: int = Field(default=50, description="Top N from each source (OpenSearch + Qdrant)")
-    retrieval_top_k: int = Field(default=5, description="Top K after reranking")
-    retrieval_plans_extra_chunks: int = Field(default=2, description="Extra chunks for plans/pricing queries")
+    retrieval_top_k: int = Field(default=8, description="Top K after reranking (higher = more context)")
+    retrieval_plans_extra_chunks: int = Field(default=4, description="Extra chunks for plans/pricing queries")
     max_retrieval_attempts: int = Field(default=2, description="Max retrieval attempts before ASK_USER/ESCALATE")
 
     # Chunking
@@ -100,6 +100,11 @@ class Settings(BaseSettings):
     # LLM fallback & caching
     llm_fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback model on primary failure")
     llm_cache_ttl_seconds: int = Field(default=3600, description="Response cache TTL")
+    llm_prompt_cache_key: str = Field(default="", description="OpenAI prompt_cache_key for better cache hits")
+    llm_prompt_cache_retention: str = Field(default="in_memory", description="OpenAI cache: in_memory or 24h")
+
+    # Intent cache (who am i, what can you do - skip LLM)
+    intent_cache_enabled: bool = Field(default=True, description="Return predefined answers for common intents")
     llm_max_tokens: int = Field(default=2048, description="Max output tokens (keep under model context)")
     llm_max_evidence_chars: int = Field(default=1200, description="Max chars per evidence chunk in prompt")
     llm_timeout_seconds: float = Field(default=60.0)

@@ -23,6 +23,7 @@ class QdrantSearchClient:
                 host=self._settings.qdrant_host,
                 port=self._settings.qdrant_port,
                 api_key=self._settings.qdrant_api_key or None,
+                check_compatibility=False,
             )
         return self._client
 
@@ -112,13 +113,15 @@ class QdrantSearchClient:
             )
 
         try:
-            results = client.search(
+            # Use query_points (new API); search() was removed in qdrant-client 1.7+
+            resp = client.query_points(
                 collection_name=self._settings.qdrant_collection,
-                query_vector=vector,
+                query=vector,
                 limit=top_n,
                 query_filter=filter_condition,
                 with_payload=True,
             )
+            results = resp.points
         except Exception as e:
             logger.error("qdrant_search_failed", error=str(e))
             return []

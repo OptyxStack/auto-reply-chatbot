@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admin, conversations, dashboard, health
+from app.api.routes import admin, conversations, dashboard, documents, health
 from app.core.config import get_settings
 from app.core.gateway import GatewayMiddleware
 from app.core.logging import setup_logging, get_logger
@@ -21,6 +21,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan: startup and shutdown."""
     setup_logging(json_logs=True, log_level="INFO")
     logger.info("application_startup")
+    # Load prompts and intents from DB into cache
+    try:
+        from app.db.session import async_session_factory
+        from app.services.branding_config import refresh_cache
+        async with async_session_factory() as session:
+            await refresh_cache(session)
+    except Exception as e:
+        logger.warning("branding_config_startup_failed", error=str(e))
     yield
     logger.info("application_shutdown")
 
@@ -52,6 +60,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix=prefix)
     app.include_router(dashboard.router, prefix=prefix)
     app.include_router(conversations.router, prefix=prefix)
+    app.include_router(documents.router, prefix=prefix)
     app.include_router(admin.router, prefix=prefix)
 
     setup_tracing(app)

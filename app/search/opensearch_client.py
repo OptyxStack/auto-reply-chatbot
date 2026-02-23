@@ -191,8 +191,9 @@ class OpenSearchClient:
         query: str,
         top_n: int = 50,
         doc_types: list[str] | None = None,
+        boost_pricing: bool = False,
     ) -> list[SearchChunk]:
-        """BM25 search. Returns top_n chunks."""
+        """BM25 search. Returns top_n chunks. When boost_pricing=True, pricing chunks rank higher."""
         client = await self._get_client()
 
         must = [
@@ -201,9 +202,16 @@ class OpenSearchClient:
         if doc_types:
             must.append({"terms": {"doc_type": doc_types}})
 
+        bool_query: dict[str, Any] = {"must": must}
+        if boost_pricing:
+            bool_query["should"] = [
+                {"term": {"doc_type": {"value": "pricing", "boost": 2.0}}},
+            ]
+            bool_query["minimum_should_match"] = 0
+
         body = {
             "size": top_n,
-            "query": {"bool": {"must": must}},
+            "query": {"bool": bool_query},
             "_source": ["chunk_id", "document_id", "chunk_text", "source_url", "doc_type"],
         }
 

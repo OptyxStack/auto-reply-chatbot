@@ -42,13 +42,11 @@ class OrchestratorContext:
 
 
 def route_model(query: str, available_models: list[str]) -> str:
-    """Route to model based on query. Returns model name."""
-    q = query.lower()
-    # High-complexity: legal, policy, multi-step -> use stronger model
-    if any(kw in q for kw in ["legal", "lawsuit", "refund policy", "billing dispute", "contract"]):
-        return available_models[0] if available_models else "gpt-4o-mini"
-    # Default
-    return available_models[-1] if available_models else "gpt-4o-mini"
+    """Route to model based on query. Use primary (stronger) model by default for accuracy."""
+    if not available_models:
+        return "gpt-4o-mini"
+    # Primary model for all queries - better accuracy; fallback only on API failure
+    return available_models[0]
 
 
 class Orchestrator:

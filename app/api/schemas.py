@@ -1,20 +1,24 @@
 """Pydantic schemas for API."""
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 # --- Conversations ---
 class CreateConversationRequest(BaseModel):
-    external_user_id: str | None = None
+    source_type: Literal["ticket", "livechat"] = Field(
+        ..., description="Source type: ticket or livechat"
+    )
+    source_id: str = Field(..., min_length=1, description="Ticket or livechat ID")
     metadata: dict[str, Any] | None = None
 
 
 class ConversationResponse(BaseModel):
     id: str
-    external_user_id: str | None
+    source_type: str
+    source_id: str
     metadata: dict[str, Any] | None
     created_at: datetime
 
@@ -35,6 +39,7 @@ class MessageResponse(BaseModel):
     content: str
     created_at: datetime
     citations: list[CitationSchema] | None = None
+    debug: dict[str, Any] | None = None
 
 
 class AssistantMessageResponse(BaseModel):
@@ -56,10 +61,77 @@ class SendMessageResponse(BaseModel):
 
 class ConversationDetailResponse(BaseModel):
     id: str
-    external_user_id: str | None
+    source_type: str
+    source_id: str
     metadata: dict[str, Any] | None
     created_at: datetime
     messages: list[MessageResponse]
+
+
+class ConversationListResponse(BaseModel):
+    items: list[ConversationResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class UpdateConversationRequest(BaseModel):
+    metadata: dict[str, Any] | None = None
+
+
+# --- Documents CRUD ---
+class DocumentResponse(BaseModel):
+    id: str
+    title: str
+    source_url: str
+    doc_type: str
+    effective_date: datetime | None
+    chunks_count: int
+    source_file: str | None = None
+    metadata: dict[str, Any] | None = None
+    raw_content: str | None = None
+    cleaned_content: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentListResponse(BaseModel):
+    items: list[DocumentResponse]
+    total: int
+    page: int
+    page_size: int
+
+
+class DocumentCreateRequest(BaseModel):
+    url: str = Field(..., description="Source URL (unique)")
+    title: str = Field(default="Untitled")
+    raw_text: str | None = None
+    raw_html: str | None = None
+    content: str | None = None
+    doc_type: str = Field(default="other")
+    effective_date: str | None = None
+    last_updated: str | None = None
+    product: str | None = None
+    region: str | None = None
+    metadata: dict[str, Any] | None = None
+    source_file: str | None = None
+
+
+class DocumentUpdateRequest(BaseModel):
+    title: str | None = None
+    doc_type: str | None = None
+    effective_date: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class FetchFromUrlRequest(BaseModel):
+    url: str = Field(..., min_length=1, description="URL to fetch content from")
+
+
+class FetchFromUrlResponse(BaseModel):
+    title: str
+    content: str
+    raw_html: str | None = None
 
 
 # --- Admin / Ingest ---
@@ -86,6 +158,40 @@ class IngestResponse(BaseModel):
     job_id: str
     documents_count: int
     status: str = "queued"
+
+
+# --- Branding config (prompts, intents) ---
+class AppConfigResponse(BaseModel):
+    key: str
+    value: str
+
+
+class AppConfigUpdateRequest(BaseModel):
+    value: str = Field(..., min_length=1)
+
+
+class IntentResponse(BaseModel):
+    id: str
+    key: str
+    patterns: str
+    answer: str
+    enabled: bool
+    sort_order: int
+
+
+class IntentCreateRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=64)
+    patterns: str = Field(..., min_length=1)
+    answer: str = Field(..., min_length=1)
+    enabled: bool = True
+    sort_order: int = 0
+
+
+class IntentUpdateRequest(BaseModel):
+    patterns: str | None = None
+    answer: str | None = None
+    enabled: bool | None = None
+    sort_order: int | None = None
 
 
 # --- Health ---
