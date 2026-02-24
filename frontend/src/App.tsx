@@ -7,16 +7,23 @@ import {
   Bot,
   Menu,
   X,
+  Globe,
+  Ticket,
 } from 'lucide-react'
 import ConversationList from './pages/ConversationList'
 import ConversationDetail from './pages/ConversationDetail'
 import DocumentList from './pages/DocumentList'
 import DocumentDetail from './pages/DocumentDetail'
 import Dashboard from './pages/Dashboard'
+import Crawler from './pages/Crawler'
+import TicketList from './pages/TicketList'
+import TicketDetail from './pages/TicketDetail'
 
 const NAV_ITEMS = [
   { to: '/', icon: MessageSquare, label: 'Conversations', match: ['/conversations'] },
+  { to: '/tickets', icon: Ticket, label: 'Tickets', match: ['/tickets'] },
   { to: '/documents', icon: FileText, label: 'Documents', match: ['/documents'] },
+  { to: '/crawler', icon: Globe, label: 'Crawl Tickets', match: ['/crawler'] },
   { to: '/dashboard', icon: BarChart3, label: 'Dashboard', match: ['/dashboard'] },
 ]
 
@@ -100,8 +107,11 @@ function App() {
           <Routes>
             <Route path="/" element={<ConversationList />} />
             <Route path="/conversations/:id" element={<ConversationDetail />} />
+            <Route path="/tickets" element={<TicketList />} />
+            <Route path="/tickets/:id" element={<TicketDetail />} />
             <Route path="/documents" element={<DocumentList />} />
             <Route path="/documents/:id" element={<DocumentDetail />} />
+            <Route path="/crawler" element={<Crawler />} />
             <Route path="/dashboard" element={<Dashboard />} />
           </Routes>
         </main>

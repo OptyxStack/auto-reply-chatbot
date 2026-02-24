@@ -206,3 +206,27 @@ class Intent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class Ticket(Base):
+    """Support ticket (source: WHMCS crawl). Stored in DB + synced to source JSON."""
+
+    __tablename__ = "tickets"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=generate_uuid)
+    external_id: Mapped[str] = mapped_column(
+        String(128), unique=True, nullable=False, index=True
+    )  # whmcs_ticket_id
+    subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(64), nullable=False, default="Open", index=True)
+    priority: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    client_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    email: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    ticket_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
+    source_file: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

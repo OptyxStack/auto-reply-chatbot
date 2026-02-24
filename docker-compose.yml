@@ -26,11 +26,13 @@ services:
       context: .
       dockerfile: Dockerfile
     image: support-ai-assistant:local
+    ipc: host  # Recommended for Chromium in Docker (avoids memory crashes)
     ports:
       - "8000:8000"
     volumes:
       - ./source:/app/source
     environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
       - REDIS_URL=redis://redis:6379/0
@@ -62,6 +64,7 @@ services:
   worker:
     image: support-ai-assistant:local
     environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
       - REDIS_URL=redis://redis:6379/0

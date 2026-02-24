@@ -81,11 +81,81 @@ export interface IngestFromSourceResponse {
   total?: number
 }
 
+export interface SaveWhmcsCookiesRequest {
+  session_cookies: Array<{ name: string; value: string; domain?: string; path?: string }>
+}
+
+export interface CrawlTicketsRequest {
+  username?: string
+  password?: string
+  totp_code?: string
+  session_cookies?: Array<{ name: string; value: string; domain?: string; path?: string }>
+  base_url?: string
+  list_path?: string
+  login_path?: string
+}
+
+export interface CrawlTicketsResponse {
+  status: string
+  count: number
+  skipped?: number
+  saved_to: string
+  tickets: Array<{
+    external_id: string
+    subject: string
+    description?: string
+    status?: string
+    priority?: string
+    detail_url?: string
+  }>
+}
+
+export interface SaveWhmcsCookiesResponse {
+  status: string
+  count: number
+}
+
+export interface WhmcsCookiesStatus {
+  saved: boolean
+  count: number
+}
+
+export interface CheckWhmcsCookiesRequest {
+  session_cookies?: Array<{ name: string; value: string; domain?: string; path?: string }>
+  base_url?: string
+  list_path?: string
+  debug?: boolean
+}
+
+export interface CheckWhmcsCookiesResponse {
+  ok: boolean
+  message: string
+  debug?: {
+    cookies_added?: Array<{ name: string; domain: string; path: string }>
+    cookies_count?: number
+    list_url?: string
+    after_goto_base?: string
+    final_url?: string
+    page_title?: string
+    redirected_to_login?: boolean
+    has_login_form?: boolean
+    error?: string
+  }
+}
+
 export const admin = {
   ingestFromSource: (sourceDir = 'source') =>
     http.post<IngestFromSourceResponse>(`/admin/ingest-from-source`, null, {
       params: { source_dir: sourceDir },
     }).then((res) => res.data),
+  saveWhmcsCookies: (data: SaveWhmcsCookiesRequest) =>
+    http.post<SaveWhmcsCookiesResponse>(`/admin/save-whmcs-cookies`, data).then((res) => res.data),
+  getWhmcsCookies: () =>
+    http.get<WhmcsCookiesStatus>(`/admin/whmcs-cookies`).then((res) => res.data),
+  checkWhmcsCookies: (data?: CheckWhmcsCookiesRequest) =>
+    http.post<CheckWhmcsCookiesResponse>(`/admin/check-whmcs-cookies`, data ?? {}).then((res) => res.data),
+  crawlTickets: (data: CrawlTicketsRequest) =>
+    http.post<CrawlTicketsResponse>(`/admin/crawl-tickets`, data).then((res) => res.data),
 }
 
 export const DOC_TYPES = ['policy', 'tos', 'faq', 'howto', 'pricing', 'other'] as const
@@ -199,4 +269,36 @@ export interface SendMessageResponse {
     created_at: string
     debug?: FlowDebug
   }
+}
+
+export interface Ticket {
+  id: string
+  external_id: string
+  subject: string
+  description: string
+  status: string
+  priority: string | null
+  email: string | null
+  name: string | null
+  metadata: Record<string, unknown> | null
+  source_file: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export interface TicketDetail extends Ticket {
+  client_id: string | null
+  detail_url: string | null
+}
+
+export const tickets = {
+  list: (page = 1, pageSize = 20, status?: string, q?: string) => {
+    const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
+    if (status) params.set('status', status)
+    if (q) params.set('q', q)
+    return api<{ items: Ticket[]; total: number; page: number; page_size: number }>(
+      `/tickets?${params}`
+    )
+  },
+  get: (id: string) => api<TicketDetail>(`/tickets/${id}`),
 }

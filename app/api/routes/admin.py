@@ -1,25 +1,36 @@
-"""Admin API routes (ingest, config, intents)."""
+"""Admin API routes (ingest, config, intents, crawl)."""
+
+import asyncio
+import json
+import queue
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pathlib import Path
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.schemas import (
     AppConfigResponse,
     AppConfigUpdateRequest,
+    CheckWhmcsCookiesRequest,
+    CheckWhmcsCookiesResponse,
+    CrawlTicketsRequest,
+    CrawlTicketsResponse,
     IngestDocument,
     IngestRequest,
     IngestResponse,
     IntentCreateRequest,
     IntentResponse,
     IntentUpdateRequest,
+    SaveWhmcsCookiesRequest,
+    SaveWhmcsCookiesResponse,
+    WHMCS_COOKIES_KEY,
 )
 from app.core.auth import verify_admin_api_key
 from app.core.logging import get_logger
 from app.db.models import AppConfig, Intent
 from app.db.session import get_db
 from app.services.branding_config import refresh_cache
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = get_logger(__name__)
 
@@ -109,6 +120,204 @@ async def ingest_from_source(
     except Exception as e:
         logger.error("ingest_from_source_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/save-whmcs-cookies", response_model=SaveWhmcsCookiesResponse)
+async def save_whmcs_cookies(
+    body: SaveWhmcsCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Save WHMCS session cookies for later crawl. Paste JSON from browser after manual login."""
+    import json
+
+    from app.db.models import generate_uuid
+
+    value = json.dumps(body.session_cookies, ensure_ascii=False)
+    result = await db.execute(select(AppConfig).where(AppConfig.key == WHMCS_COOKIES_KEY).limit(1))
+    row = result.scalars().one_or_none()
+    if row:
+        row.value = value
+    else:
+        row = AppConfig(id=generate_uuid(), key=WHMCS_COOKIES_KEY, value=value)
+        db.add(row)
+    await db.commit()
+    return SaveWhmcsCookiesResponse(status="ok", count=len(body.session_cookies))
+
+
+@router.post("/check-whmcs-cookies", response_model=CheckWhmcsCookiesResponse)
+async def api_check_whmcs_cookies(
+    body: CheckWhmcsCookiesRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Check if saved or provided cookies authenticate successfully."""
+    session_cookies = body.session_cookies
+    if not session_cookies or len(session_cookies) == 0:
+        result = await db.execute(select(AppConfig).where(AppConfig.key == WHMCS_COOKIES_KEY).limit(1))
+        row = result.scalars().one_or_none()
+        if row:
+            import json
+
+            try:
+                session_cookies = json.loads(row.value)
+            except Exception:
+                session_cookies = None
+
+    if not session_cookies or len(session_cookies) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Lưu cookies trước hoặc gửi session_cookies trong body.",
+        )
+
+    from app.crawlers.whmcs import check_whmcs_cookies as do_check
+
+    def _run():
+        return do_check(
+            base_url=body.base_url.rstrip("/"),
+            list_path=body.list_path,
+            session_cookies=session_cookies,
+            headless=True,
+            timeout_ms=15000,
+            debug=body.debug,
+        )
+
+    try:
+        ok, message, debug_info = await asyncio.to_thread(_run)
+        return CheckWhmcsCookiesResponse(ok=ok, message=message, debug=debug_info)
+    except Exception as e:
+        logger.error("check_whmcs_cookies_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/whmcs-cookies")
+async def get_whmcs_cookies(
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Get saved WHMCS cookies (count only, not values)."""
+    result = await db.execute(select(AppConfig).where(AppConfig.key == WHMCS_COOKIES_KEY).limit(1))
+    row = result.scalars().one_or_none()
+    if not row:
+        return {"saved": False, "count": 0}
+    try:
+        import json
+
+        data = json.loads(row.value)
+        return {"saved": True, "count": len(data) if isinstance(data, list) else 0}
+    except Exception:
+        return {"saved": True, "count": 0}
+
+
+@router.post("/crawl-tickets", response_model=CrawlTicketsResponse)
+async def crawl_tickets(
+    body: CrawlTicketsRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Crawl WHMCS tickets. Uses saved cookies (from save-whmcs-cookies) or inline session_cookies/credentials."""
+    session_cookies = body.session_cookies
+    if not session_cookies or len(session_cookies) == 0:
+        # Load from saved config
+        result = await db.execute(select(AppConfig).where(AppConfig.key == WHMCS_COOKIES_KEY).limit(1))
+        row = result.scalars().one_or_none()
+        if row:
+            import json
+
+            try:
+                session_cookies = json.loads(row.value)
+            except Exception:
+                session_cookies = None
+
+    has_cookies = session_cookies and len(session_cookies) > 0
+    has_creds = body.username and body.password
+    if not has_cookies and not has_creds:
+        raise HTTPException(
+            status_code=400,
+            detail="Lưu cookies trước (Save cookies) hoặc cung cấp username+password.",
+        )
+
+    from app.crawlers.whmcs import WHMCSConfig, crawl_whmcs_tickets
+    from app.services.ticket_db import upsert_ticket_from_crawl
+
+    ticket_queue: queue.Queue = queue.Queue()
+
+    async def _save_worker():
+        """Lưu từng ticket vào DB ngay khi crawl xong."""
+        saved = 0
+        while True:
+            try:
+                t = await asyncio.to_thread(ticket_queue.get)
+                if t is None:
+                    break
+                ok = await upsert_ticket_from_crawl(t)
+                if ok:
+                    saved += 1
+            except Exception as e:
+                logger.warning("crawl_ticket_save_failed", error=str(e))
+        return saved
+
+    def _run_crawl():
+        config = WHMCSConfig(
+            base_url=body.base_url.rstrip("/"),
+            list_path=body.list_path,
+            login_path=body.login_path,
+            username=body.username,
+            password=body.password,
+            totp_code=body.totp_code,
+            session_cookies=session_cookies,
+            headless=True,
+        )
+        return crawl_whmcs_tickets(config, ticket_queue=ticket_queue)
+
+    try:
+        save_task = asyncio.create_task(_save_worker())
+        tickets, skipped = await asyncio.to_thread(_run_crawl)
+        await save_task
+    except Exception as e:
+        logger.error("crawl_tickets_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # Save to source/tickets.json
+    source_dir = Path.cwd() / "source"
+    if not source_dir.exists():
+        for base in (Path("/app"), Path.cwd()):
+            candidate = base / "source"
+            if candidate.exists():
+                source_dir = candidate
+                break
+    source_dir.mkdir(parents=True, exist_ok=True)
+    out_path = source_dir / "tickets.json"
+
+    data = {
+        "source": "whmcs",
+        "crawled_from": body.base_url,
+        "tickets": [
+            {
+                "external_id": t["external_id"],
+                "subject": t["subject"],
+                "description": t.get("description", ""),
+                "status": t.get("status", "Open"),
+                "priority": t.get("priority"),
+                "client_id": t.get("client_id"),
+                "email": t.get("email"),
+                "name": t.get("name"),
+                "detail_url": t.get("detail_url"),
+                "metadata": t.get("metadata"),
+            }
+            for t in tickets
+        ],
+    }
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    return CrawlTicketsResponse(
+        status="ok",
+        count=len(tickets),
+        skipped=skipped,
+        saved_to=str(out_path),
+        tickets=tickets,
+    )
 
 
 # --- Branding config (prompts, intents) ---

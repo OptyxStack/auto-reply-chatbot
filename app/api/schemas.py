@@ -194,6 +194,79 @@ class IntentUpdateRequest(BaseModel):
     sort_order: int | None = None
 
 
+# --- WHMCS cookies (save separately, use for crawl) ---
+WHMCS_COOKIES_KEY = "whmcs_session_cookies"
+
+
+class SaveWhmcsCookiesRequest(BaseModel):
+    """Save WHMCS session cookies for later crawl. Paste JSON from browser."""
+
+    session_cookies: list[dict[str, Any]] = Field(
+        ...,
+        min_length=1,
+        description="Cookies from browser: [{name, value, domain?, path?}]",
+    )
+
+
+class SaveWhmcsCookiesResponse(BaseModel):
+    status: str = "ok"
+    count: int = Field(..., description="Number of cookies saved")
+
+
+class CheckWhmcsCookiesRequest(BaseModel):
+    """Check if cookies authenticate. Uses saved cookies if session_cookies not provided."""
+
+    session_cookies: list[dict[str, Any]] | None = None
+    base_url: str = Field(
+        default="https://greencloudvps.com/billing/greenvps",
+        description="WHMCS base URL",
+    )
+    list_path: str = Field(
+        default="supporttickets.php?filter=1",
+        description="Ticket list path",
+    )
+    debug: bool = Field(default=False, description="Return debug info (cookies added, redirect, etc.)")
+
+
+class CheckWhmcsCookiesResponse(BaseModel):
+    ok: bool = Field(..., description="True if auth succeeded")
+    message: str = Field(..., description="Status message")
+    debug: dict[str, Any] | None = Field(default=None, description="Debug info when debug=True")
+
+
+# --- Crawl tickets (uses saved cookies or inline credentials) ---
+class CrawlTicketsRequest(BaseModel):
+    """Crawl WHMCS tickets. Uses saved cookies from save-whmcs-cookies, or inline session_cookies/credentials."""
+
+    username: str | None = None
+    password: str | None = None
+    totp_code: str | None = Field(default=None, min_length=6, max_length=8, description="2FA code")
+    session_cookies: list[dict[str, Any]] | None = Field(
+        None,
+        description="Inline cookies (optional if already saved via save-whmcs-cookies)",
+    )
+    base_url: str = Field(
+        default="https://greencloudvps.com/billing/greenvps",
+        description="WHMCS base URL",
+    )
+    list_path: str = Field(
+        default="supporttickets.php?filter=1",
+        description="Ticket list path: supporttickets.php?filter=1",
+    )
+    login_path: str = Field(
+        default="login.php",
+        description="Login page path (for username/password mode)",
+    )
+
+
+class CrawlTicketsResponse(BaseModel):
+    status: str = "ok"
+    count: int = Field(..., description="Number of tickets crawled and saved")
+    skipped: int = Field(0, description="Number of system-alert tickets skipped this run")
+    saved_to: str = Field(..., description="Path to saved JSON file")
+    tickets: list[dict[str, Any]] = Field(default_factory=list, description="Crawled ticket data")
+
+
 # --- Health ---
 class HealthResponse(BaseModel):
     status: str

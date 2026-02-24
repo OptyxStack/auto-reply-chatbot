@@ -1,14 +1,19 @@
 services:
   frontend:
-    image: node:20
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
     working_dir: /app
     volumes:
       - ./frontend:/app
     ports:
       - "5173:5173"
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - api
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
     environment:
       - VITE_API_KEY=${API_KEY:-dev-key}
+      - VITE_API_BASE=/v1
       - VITE_API_TARGET=http://api:8000
 
   api:
@@ -16,10 +21,14 @@ services:
       context: .
       dockerfile: Dockerfile.dev
     image: support-ai-assistant:dev
+    ipc: host
     volumes:
       - ./:/app
+    ports:
+      - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
     environment:
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
       - REDIS_URL=redis://redis:6379/0

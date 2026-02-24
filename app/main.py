@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admin, conversations, dashboard, documents, health
+from app.api.routes import admin, conversations, dashboard, documents, health, tickets
 from app.core.config import get_settings
 from app.core.gateway import GatewayMiddleware
 from app.core.logging import setup_logging, get_logger
@@ -61,6 +61,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, prefix=prefix)
     app.include_router(conversations.router, prefix=prefix)
     app.include_router(documents.router, prefix=prefix)
+    app.include_router(tickets.router, prefix=prefix)
     app.include_router(admin.router, prefix=prefix)
 
     setup_tracing(app)

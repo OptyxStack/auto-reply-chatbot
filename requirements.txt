@@ -37,3 +37,4 @@ tiktoken>=0.5.2
 beautifulsoup4>=4.12.0
 lxml>=5.1.0
 boto3>=1.34.0
+playwright==1.48.0
