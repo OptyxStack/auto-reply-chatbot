@@ -209,7 +209,7 @@ class Intent(Base):
 
 
 class Ticket(Base):
-    """Support ticket (source: WHMCS crawl). Stored in DB + synced to source JSON."""
+    """Support ticket (source: WHMCS crawl). Stored in DB. Ingest to file only approved."""
 
     __tablename__ = "tickets"
 
@@ -226,6 +226,10 @@ class Ticket(Base):
     name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     ticket_metadata: Mapped[dict | None] = mapped_column("metadata", JSONB, nullable=True)
     source_file: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    # approval_status: pending=not yet approved, approved=approved (ingested to file), rejected=rejected
+    approval_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

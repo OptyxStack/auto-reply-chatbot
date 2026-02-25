@@ -221,7 +221,7 @@ async def send_message(
         if m.id != user_msg.id
     ][-10:]  # Last 10 for context
 
-    # Generate answer
+    # Generate answer (tickets are retrieved via vector/RAG like docs when relevant)
     answer_svc = AnswerService()
     trace_id = get_trace_id()
     output = await answer_svc.generate(

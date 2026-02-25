@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { tickets, type Ticket } from '../api/client'
+import { tickets, admin, type Ticket } from '../api/client'
 import {
   ExternalLink,
   ChevronLeft,
@@ -9,6 +9,10 @@ import {
   Ticket as TicketIcon,
   Search,
   Filter,
+  CheckCircle2,
+  XCircle,
+  FileDown,
+  Clock,
 } from 'lucide-react'
 
 export default function TicketList() {
@@ -19,8 +23,11 @@ export default function TicketList() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filterStatus, setFilterStatus] = useState('')
+  const [filterApproval, setFilterApproval] = useState('')
   const [filterQ, setFilterQ] = useState('')
   const [filterQApplied, setFilterQApplied] = useState('')
+  const [ingesting, setIngesting] = useState(false)
+  const [ingestResult, setIngestResult] = useState<{ path: string; count: number } | null>(null)
   const pageSize = 15
 
   const load = async () => {
@@ -31,6 +38,7 @@ export default function TicketList() {
         page,
         pageSize,
         filterStatus || undefined,
+        filterApproval || undefined,
         filterQApplied || undefined
       )
       setItems(res.items)
@@ -44,7 +52,29 @@ export default function TicketList() {
 
   useEffect(() => {
     setPage(1)
-  }, [filterStatus, filterQApplied])
+  }, [filterStatus, filterApproval, filterQApplied])
+
+  const handleIngestToFile = async () => {
+    setIngestResult(null)
+    setIngesting(true)
+    try {
+      const res = await admin.ingestTicketsToFile()
+      setIngestResult({ path: res.path, count: res.count })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ingest failed')
+    } finally {
+      setIngesting(false)
+    }
+  }
+
+  const handleApproval = async (t: Ticket, status: 'approved' | 'rejected') => {
+    try {
+      await admin.updateTicketApproval(t.id, status)
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Update failed')
+    }
+  }
 
   useEffect(() => {
     load()
@@ -59,16 +89,30 @@ export default function TicketList() {
       <header className="flex justify-between items-center mb-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Tickets</h1>
-          <p className="text-sm text-muted mt-1">Quản lý ticket từ WHMCS và các nguồn khác</p>
+          <p className="text-sm text-muted mt-1">Manage tickets from WHMCS. Only approved tickets are exported to file.</p>
         </div>
+        <button
+          onClick={handleIngestToFile}
+          disabled={ingesting}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium
+                     hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {ingesting ? <Loader2 size={16} className="animate-spin" /> : <FileDown size={16} />}
+          Export approved tickets to file
+        </button>
       </header>
+      {ingestResult && (
+        <div className="mb-4 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm">
+          Exported {ingestResult.count} ticket(s) to {ingestResult.path}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3 mb-4">
         <div className="relative flex-1 min-w-[200px] max-w-xs">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
           <input
             type="text"
-            placeholder="Tìm subject, nội dung..."
+            placeholder="Search subject, content..."
             value={filterQ}
             onChange={(e) => setFilterQ(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
@@ -79,23 +123,35 @@ export default function TicketList() {
         <select
           value={filterStatus}
           onChange={(e) => setFilterStatus(e.target.value)}
-          aria-label="Lọc theo trạng thái"
+          aria-label="Filter by status"
           className="px-3 py-2 rounded-lg border border-border bg-primary-secondary text-zinc-100 text-sm
                      focus:outline-none focus:border-accent"
         >
-          <option value="">Tất cả trạng thái</option>
+          <option value="">All statuses</option>
           <option value="Open">Open</option>
           <option value="Answered">Answered</option>
           <option value="Customer-Reply">Customer-Reply</option>
           <option value="Closed">Closed</option>
           <option value="In Progress">In Progress</option>
         </select>
+        <select
+          value={filterApproval}
+          onChange={(e) => setFilterApproval(e.target.value)}
+          aria-label="Filter by approval"
+          className="px-3 py-2 rounded-lg border border-border bg-primary-secondary text-zinc-100 text-sm
+                     focus:outline-none focus:border-accent"
+        >
+          <option value="">All approval</option>
+          <option value="pending">Pending</option>
+          <option value="approved">Approved</option>
+          <option value="rejected">Rejected</option>
+        </select>
         <button
           className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-accent text-white text-sm font-medium hover:bg-accent-hover"
           onClick={handleSearch}
         >
           <Filter size={16} />
-          Lọc
+          Filter
         </button>
       </div>
 
@@ -109,15 +165,15 @@ export default function TicketList() {
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-16 text-muted">
             <Loader2 size={18} className="animate-spin-slow" />
-            <span className="text-sm">Đang tải tickets...</span>
+            <span className="text-sm">Loading tickets...</span>
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center py-16 text-muted">
             <div className="w-12 h-12 rounded-xl bg-accent-muted flex items-center justify-center mb-4">
               <TicketIcon size={24} className="text-accent" />
             </div>
-            <p className="font-medium text-zinc-300 mb-1">Chưa có ticket nào</p>
-            <p className="text-sm">Crawl tickets từ trang Crawl Tickets để thêm dữ liệu</p>
+            <p className="font-medium text-zinc-300 mb-1">No tickets yet</p>
+            <p className="text-sm">Crawl tickets from Crawl Tickets page to add data</p>
           </div>
         ) : (
           <table className="w-full text-sm">
@@ -127,8 +183,9 @@ export default function TicketList() {
                 <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Subject</th>
                 <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Status</th>
                 <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Priority</th>
-                <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Khách hàng</th>
-                <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Cập nhật</th>
+                <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Customer</th>
+                <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Approval</th>
+                <th className="px-4 py-3 text-left text-muted font-medium text-xs uppercase tracking-wider">Updated</th>
                 <th className="px-4 py-3 text-right text-muted font-medium text-xs uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -146,7 +203,7 @@ export default function TicketList() {
                   </td>
                   <td className="px-4 py-3.5 max-w-[240px]">
                     <span className="truncate block" title={t.subject}>
-                      {t.subject || '(Không có tiêu đề)'}
+                      {t.subject || '(No subject)'}
                     </span>
                   </td>
                   <td className="px-4 py-3.5">
@@ -155,6 +212,41 @@ export default function TicketList() {
                   <td className="px-4 py-3.5 text-muted-foreground">{t.priority || '-'}</td>
                   <td className="px-4 py-3.5 text-muted-foreground">
                     {t.name || t.email || '-'}
+                  </td>
+                  <td className="px-4 py-3.5">
+                    <ApprovalBadge status={t.approval_status} />
+                    <div className="flex gap-1 mt-1" onClick={(e) => e.stopPropagation()}>
+                      {t.approval_status !== 'approved' && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleApproval(t, 'approved') }}
+                          className="p-1 rounded text-emerald-400 hover:bg-emerald-500/20"
+                          title="Approve"
+                        >
+                          <CheckCircle2 size={14} />
+                        </button>
+                      )}
+                      {t.approval_status !== 'rejected' && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleApproval(t, 'rejected') }}
+                          className="p-1 rounded text-red-400 hover:bg-red-500/20"
+                          title="Reject"
+                        >
+                          <XCircle size={14} />
+                        </button>
+                      )}
+                      {t.approval_status !== 'pending' && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); handleApproval(t, 'pending') }}
+                          className="p-1 rounded text-muted hover:bg-surface-hover"
+                          title="Pending"
+                        >
+                          <Clock size={14} />
+                        </button>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3.5 text-muted-foreground">
                     {t.updated_at
@@ -171,7 +263,7 @@ export default function TicketList() {
                         to={`/tickets/${t.id}`}
                         className="p-1.5 rounded-md text-muted-foreground hover:text-zinc-100 hover:bg-primary-tertiary"
                         onClick={(e) => e.stopPropagation()}
-                        title="Xem chi tiết"
+                        title="View details"
                       >
                         <ExternalLink size={15} />
                       </Link>
@@ -187,13 +279,13 @@ export default function TicketList() {
       {totalPages > 1 && (
         <div className="flex items-center justify-between mt-4">
           <span className="text-sm text-muted">
-            {total} ticket &middot; trang {page} / {totalPages}
+            {total} ticket(s) &middot; page {page} / {totalPages}
           </span>
           <div className="flex items-center gap-1">
             <button
               type="button"
-              title="Trang trước"
-              aria-label="Trang trước"
+              title="Previous page"
+              aria-label="Previous page"
               className="p-2 rounded-lg text-muted-foreground hover:text-zinc-100 hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
               disabled={page <= 1}
               onClick={() => setPage((p) => p - 1)}
@@ -219,8 +311,8 @@ export default function TicketList() {
             })}
             <button
               type="button"
-              title="Trang sau"
-              aria-label="Trang sau"
+              title="Next page"
+              aria-label="Next page"
               className="p-2 rounded-lg text-muted-foreground hover:text-zinc-100 hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
               disabled={page >= totalPages}
               onClick={() => setPage((p) => p + 1)}
@@ -231,6 +323,25 @@ export default function TicketList() {
         </div>
       )}
     </div>
+  )
+}
+
+function ApprovalBadge({ status }: { status: string }) {
+  const colors: Record<string, string> = {
+    pending: 'bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20',
+    approved: 'bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20',
+    rejected: 'bg-red-500/10 text-red-400 ring-1 ring-red-500/20',
+  }
+  const labels: Record<string, string> = {
+    pending: 'Pending',
+    approved: 'Approved',
+    rejected: 'Rejected',
+  }
+  const cls = colors[status] || 'bg-surface-hover text-muted-foreground'
+  return (
+    <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded-md ${cls}`}>
+      {labels[status] || status}
+    </span>
   )
 }
 

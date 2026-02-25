@@ -53,11 +53,11 @@ export default function Crawler() {
     setConnectResult(null)
     const cookies = useInlineCookies ? parseCookies(sessionCookies) : null
     if (useInlineCookies && (!cookies || cookies.length === 0)) {
-      setConnectResult({ ok: false, message: 'Dán cookies vào ô trên trước' })
+      setConnectResult({ ok: false, message: 'Paste cookies into the field above first' })
       return
     }
     if (!useInlineCookies && (!cookiesStatus?.saved || (cookiesStatus?.count ?? 0) === 0)) {
-      setConnectResult({ ok: false, message: 'Lưu cookies trước (phần 1)' })
+      setConnectResult({ ok: false, message: 'Save cookies first (section 1)' })
       return
     }
     setCheckingConnect(true)
@@ -71,7 +71,7 @@ export default function Crawler() {
       const res = await admin.checkWhmcsCookies(payload)
       setConnectResult({ ok: res.ok, message: res.message, debug: res.debug })
     } catch (e) {
-      setConnectResult({ ok: false, message: e instanceof Error ? e.message : 'Kiểm tra thất bại' })
+      setConnectResult({ ok: false, message: e instanceof Error ? e.message : 'Check failed' })
     } finally {
       setCheckingConnect(false)
     }
@@ -84,7 +84,7 @@ export default function Crawler() {
     setConnectResult(null)
     const cookies = parseCookies(sessionCookies)
     if (!cookies || cookies.length === 0) {
-      setSaveCookiesError('Dán cookies JSON hợp lệ. Format: [{"name":"...","value":"...","domain":"...","path":"/"}]')
+      setSaveCookiesError('Paste valid cookies JSON. Format: [{"name":"...","value":"...","domain":"...","path":"/"}]')
       return
     }
     setSavingCookies(true)
@@ -93,7 +93,7 @@ export default function Crawler() {
       setSaveCookiesResult({ count: res.count })
       setSaveCookiesError(null)
     } catch (e) {
-      setSaveCookiesError(e instanceof Error ? e.message : 'Lưu cookies thất bại')
+      setSaveCookiesError(e instanceof Error ? e.message : 'Failed to save cookies')
     } finally {
       setSavingCookies(false)
     }
@@ -106,12 +106,12 @@ export default function Crawler() {
 
     if (mode === 'creds') {
       if (!username.trim() || !password.trim()) {
-        setCrawlError('Username và Password là bắt buộc (lưu ý: có thể bị chặn bởi CAPTCHA)')
+        setCrawlError('Username and Password are required (note: may be blocked by CAPTCHA)')
         return
       }
     } else {
       if (!cookiesStatus?.saved || (cookiesStatus?.count ?? 0) === 0) {
-        setCrawlError('Lưu cookies trước (phần 1) hoặc chuyển sang Username/Password')
+        setCrawlError('Save cookies first (section 1) or switch to Username/Password')
         return
       }
     }
@@ -135,7 +135,7 @@ export default function Crawler() {
       const res = await admin.crawlTickets(payload)
       setCrawlResult(res)
     } catch (e) {
-      setCrawlError(e instanceof Error ? e.message : 'Crawl thất bại')
+      setCrawlError(e instanceof Error ? e.message : 'Crawl failed')
     } finally {
       setCrawling(false)
     }
@@ -146,42 +146,42 @@ export default function Crawler() {
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">Crawl Tickets WHMCS</h1>
         <p className="text-sm text-muted mt-1">
-          Bước 1: Lưu cookies sau khi đăng nhập thủ công. Bước 2: Crawl danh sách ticket.
+          Step 1: Save cookies after manual login. Step 2: Crawl ticket list.
         </p>
       </header>
 
-      {/* --- Phần 1: Lưu cookies --- */}
+      {/* --- Section 1: Save cookies --- */}
       <section className="bg-surface border border-border rounded-xl p-6">
         <h2 className="text-lg font-medium flex items-center gap-2 mb-4">
           <Cookie size={18} />
-          1. Lưu Session Cookies
+          1. Save Session Cookies
         </h2>
         <p className="text-sm text-muted mb-4">
-          <strong>Cách 1 – Đăng nhập qua trình duyệt (khuyến nghị):</strong> Chạy script trên máy local, mở browser để đăng nhập, script tự lấy cookies và gửi lên API.
+          <strong>Method 1 – Login via browser (recommended):</strong> Run script on local machine, open browser to login, script will fetch cookies and send to API.
         </p>
-        <p className="text-xs text-muted mb-2">Lần đầu: setup venv và cài package</p>
+        <p className="text-xs text-muted mb-2">First time: setup venv and install package</p>
         <div className="mb-2 p-3 rounded-lg bg-primary/50 font-mono text-xs overflow-x-auto space-y-1">
           <div># Windows (PowerShell)</div>
           <div>.\scripts\setup_login.ps1</div>
           <div className="mt-2"># Linux/Mac</div>
           <div>bash scripts/setup_login.sh</div>
         </div>
-        <p className="text-xs text-muted mb-2">Sau đó: activate venv rồi chạy script</p>
+        <p className="text-xs text-muted mb-2">Then: activate venv and run script</p>
         <div className="mb-4 p-3 rounded-lg bg-primary/50 font-mono text-xs overflow-x-auto space-y-1">
           <div>.\.venv-login\Scripts\Activate.ps1   # Windows</div>
           <div>source .venv-login/bin/activate     # Linux/Mac</div>
           <div className="mt-2">python scripts/whmcs_login_browser.py --api-url http://localhost:8000/v1 --api-key dev-key</div>
         </div>
         <p className="text-xs text-muted mb-4">
-          Chạy trên máy local (không chạy trong Docker). API có thể chạy Docker, dùng --api-url http://localhost:8000/v1.
+          Run on local machine (not in Docker). API can run in Docker, use --api-url http://localhost:8000/v1.
         </p>
         <p className="text-sm text-muted mb-4">
-          <strong>Cách 2 – Copy cookies thủ công:</strong>{' '}
+          <strong>Method 2 – Copy cookies manually:</strong>{' '}
           <a href={LOGIN_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 text-accent hover:underline">
             <ExternalLink size={14} />
-            Mở trang đăng nhập WHMCS
+            Open WHMCS login page
           </a>
-          {' → '}Đăng nhập (giải CAPTCHA nếu có) → F12 → Application → Cookies → Copy → Dán JSON vào ô dưới
+          {' → '}Login (solve CAPTCHA if any) → F12 → Application → Cookies → Copy → Paste JSON into field below
         </p>
         <form onSubmit={handleSaveCookies} className="space-y-4">
           <textarea
@@ -211,12 +211,12 @@ export default function Crawler() {
               {savingCookies ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Đang lưu...
+                  Saving...
                 </>
               ) : (
                 <>
                   <Save size={16} />
-                  Lưu cookies
+                  Save cookies
                 </>
               )}
             </button>
@@ -231,7 +231,7 @@ export default function Crawler() {
               {checkingConnect ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Đang kiểm tra...
+                  Checking...
                 </>
               ) : (
                 <>
@@ -267,24 +267,24 @@ export default function Crawler() {
         {saveCookiesResult && (
           <div className="mt-4 flex items-center gap-2 text-emerald-300 text-sm">
             <CheckCircle2 size={16} />
-            Đã lưu {saveCookiesResult.count} cookies
+            Saved {saveCookiesResult.count} cookies
           </div>
         )}
         {cookiesStatus?.saved && cookiesStatus.count > 0 && !saveCookiesResult && (
           <div className="mt-4 text-sm text-muted">
-            Đã có {cookiesStatus.count} cookies được lưu. Có thể crawl ngay (phần 2).
+            {cookiesStatus.count} cookies saved. You can crawl now (section 2).
           </div>
         )}
       </section>
 
-      {/* --- Phần 2: Crawl tickets --- */}
+      {/* --- Section 2: Crawl tickets --- */}
       <section className="bg-surface border border-border rounded-xl p-6">
         <h2 className="text-lg font-medium flex items-center gap-2 mb-4">
           <Database size={18} />
-          2. Crawl danh sách ticket
+          2. Crawl ticket list
         </h2>
         <p className="text-sm text-muted mb-4">
-          Dùng cookies đã lưu hoặc Username/Password. List ticket tại{' '}
+          Use saved cookies or Username/Password. Ticket list at{' '}
           <a href={LIST_URL} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
             supporttickets.php?filter=1
           </a>
@@ -300,7 +300,7 @@ export default function Crawler() {
               }`}
             >
               <Cookie size={16} />
-              Dùng cookies đã lưu
+              Use saved cookies
             </button>
             <button
               type="button"
@@ -316,7 +316,7 @@ export default function Crawler() {
 
           {mode === 'cookies' && (
             <div className="text-sm text-muted">
-              Sẽ dùng {cookiesStatus?.count ?? 0} cookies đã lưu ở phần 1.
+              Will use {cookiesStatus?.count ?? 0} cookies saved in section 1.
             </div>
           )}
 
@@ -359,7 +359,7 @@ export default function Crawler() {
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium text-zinc-200 mb-2">
                   <Shield size={14} />
-                  Mã 2FA (Authenticator)
+                  2FA Code (Authenticator)
                 </label>
                 <input
                   type="text"
@@ -397,7 +397,7 @@ export default function Crawler() {
             <div>
               <label className="flex items-center gap-2 text-sm font-medium text-zinc-200 mb-2">
                 <Database size={14} />
-                List path (trang danh sách ticket)
+                List path (ticket list page)
               </label>
               <input
                 type="text"
@@ -409,7 +409,7 @@ export default function Crawler() {
                            placeholder:text-muted"
                 disabled={crawling}
               />
-              <p className="text-xs text-muted mt-1">Mặc định: supporttickets.php?filter=1</p>
+              <p className="text-xs text-muted mt-1">Default: supporttickets.php?filter=1</p>
             </div>
             <div>
               <label className="flex items-center gap-2 text-sm font-medium text-zinc-200 mb-2">
@@ -448,7 +448,7 @@ export default function Crawler() {
               {checkingConnect ? (
                 <>
                   <Loader2 size={16} className="animate-spin" />
-                  Đang kiểm tra...
+                  Checking...
                 </>
               ) : (
                 <>
@@ -467,12 +467,12 @@ export default function Crawler() {
             {crawling ? (
               <>
                 <Loader2 size={18} className="animate-spin" />
-                Đang crawl... (có thể mất 2–5 phút)
+                Crawling... (may take 2–5 minutes)
               </>
             ) : (
               <>
                 <Database size={18} />
-                Bắt đầu crawl
+                Start crawl
               </>
             )}
             </button>
@@ -496,16 +496,23 @@ export default function Crawler() {
           <div className="mt-6 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 animate-fade-in">
             <div className="flex items-center gap-2 text-emerald-300 font-medium mb-2">
               <CheckCircle2 size={18} />
-              Crawl hoàn tất
+              Crawl complete
             </div>
             <p className="text-sm text-emerald-200/90">
-              Đã lưu <strong>{crawlResult.count}</strong> ticket vào{' '}
-              <code className="text-xs bg-black/20 px-1.5 py-0.5 rounded">{crawlResult.saved_to}</code>
+              Saved <strong>{crawlResult.count}</strong> ticket(s) to{' '}
+              {crawlResult.saved_to === 'database' ? (
+                <span>database</span>
+              ) : (
+                <code className="text-xs bg-black/20 px-1.5 py-0.5 rounded">{crawlResult.saved_to}</code>
+              )}
               {crawlResult.skipped != null && crawlResult.skipped > 0 && (
                 <span className="ml-2 text-amber-300">
-                  (bỏ qua {crawlResult.skipped} ticket cảnh báo hệ thống)
+                  (skipped {crawlResult.skipped} system alert tickets)
                 </span>
               )}
+            </p>
+            <p className="text-sm text-muted mt-1">
+              Go to Tickets page to approve tickets and export to file (only approved tickets are used).
             </p>
             {crawlResult.tickets.length > 0 && (
               <div className="mt-3 max-h-48 overflow-y-auto rounded-lg bg-black/20 p-3 text-xs">
@@ -517,7 +524,7 @@ export default function Crawler() {
                 ))}
                 {crawlResult.tickets.length > 10 && (
                   <div className="py-1.5 text-muted">
-                    ... và {crawlResult.tickets.length - 10} ticket khác
+                    ... and {crawlResult.tickets.length - 10} more tickets
                   </div>
                 )}
               </div>

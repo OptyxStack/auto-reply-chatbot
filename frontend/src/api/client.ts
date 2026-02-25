@@ -2,7 +2,7 @@ import axios, { type AxiosInstance } from 'axios'
 
 // Use full backend URL in dev (e.g. VITE_API_BASE=http://localhost:8000/v1), relative /v1 in prod (nginx proxies)
 const API_BASE = import.meta.env.VITE_API_BASE || '/v1'
-// Dùng chung một key cho cả API và Admin (X-API-Key + X-Admin-API-Key)
+// Shared key for both API and Admin (X-API-Key + X-Admin-API-Key)
 const API_KEY = import.meta.env.VITE_API_KEY || import.meta.env.VITE_ADMIN_API_KEY || 'dev-key'
 
 const http: AxiosInstance = axios.create({
@@ -156,6 +156,10 @@ export const admin = {
     http.post<CheckWhmcsCookiesResponse>(`/admin/check-whmcs-cookies`, data ?? {}).then((res) => res.data),
   crawlTickets: (data: CrawlTicketsRequest) =>
     http.post<CrawlTicketsResponse>(`/admin/crawl-tickets`, data).then((res) => res.data),
+  updateTicketApproval: (ticketId: string, approvalStatus: 'pending' | 'approved' | 'rejected') =>
+    http.patch(`/admin/tickets/${ticketId}/approval`, { approval_status: approvalStatus }).then((res) => res.data),
+  ingestTicketsToFile: () =>
+    http.post<{ status: string; path: string; count: number }>(`/admin/ingest-tickets-to-file`).then((res) => res.data),
 }
 
 export const DOC_TYPES = ['policy', 'tos', 'faq', 'howto', 'pricing', 'other'] as const
@@ -280,6 +284,7 @@ export interface Ticket {
   priority: string | null
   email: string | null
   name: string | null
+  approval_status: 'pending' | 'approved' | 'rejected'
   metadata: Record<string, unknown> | null
   source_file: string | null
   created_at: string | null
@@ -292,9 +297,10 @@ export interface TicketDetail extends Ticket {
 }
 
 export const tickets = {
-  list: (page = 1, pageSize = 20, status?: string, q?: string) => {
+  list: (page = 1, pageSize = 20, status?: string, approvalStatus?: string, q?: string) => {
     const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) })
     if (status) params.set('status', status)
+    if (approvalStatus) params.set('approval_status', approvalStatus)
     if (q) params.set('q', q)
     return api<{ items: Ticket[]; total: number; page: number; page_size: number }>(
       `/tickets?${params}`

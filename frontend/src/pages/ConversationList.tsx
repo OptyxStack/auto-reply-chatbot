@@ -299,7 +299,7 @@ function CreateConversationModal({
             </label>
             <input
               type="text"
-              placeholder="e.g. TKT-12345"
+              placeholder="e.g. ticket ID or livechat ID"
               value={sourceId}
               onChange={(e) => setSourceId(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleSubmit()}

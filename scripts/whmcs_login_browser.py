@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Đăng nhập WHMCS qua trình duyệt - mở browser, user đăng nhập thủ công (giải CAPTCHA),
-sau đó script tự lấy cookies và gửi lên API hoặc in ra để paste.
+WHMCS login via browser - open browser, user logs in manually (solve CAPTCHA if any),
+then script fetches cookies and sends to API or prints for paste.
 
 Flow:
-1. Mở trình duyệt (visible)
-2. Điều hướng đến trang login WHMCS
-3. User đăng nhập (giải CAPTCHA nếu có)
-4. Chờ redirect sang trang ticket list
-5. Lấy cookies → gửi lên API hoặc in JSON
+1. Open browser (visible)
+2. Navigate to WHMCS login page
+3. User logs in (solve CAPTCHA if any)
+4. Wait for redirect to ticket list page
+5. Get cookies → send to API or print JSON
 
 Usage:
-  # In cookies ra stdout (paste vào app)
+  # Print cookies to stdout (paste into app)
   python scripts/whmcs_login_browser.py
 
-  # Gửi trực tiếp lên API
+  # Send directly to API
   python scripts/whmcs_login_browser.py --api-url http://localhost:8000/v1 --api-key dev-key
 
   # Custom base URL
@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
     from playwright.sync_api import sync_playwright
 except ImportError:
-    print("Cần cài playwright: pip install playwright && python -m playwright install chromium")
+    print("Install playwright: pip install playwright && python -m playwright install chromium")
     sys.exit(1)
 
 try:
@@ -42,7 +42,7 @@ except ImportError:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Đăng nhập WHMCS qua trình duyệt - user login thủ công, script lấy cookies"
+        description="WHMCS login via browser - user logs in manually, script fetches cookies"
     )
     parser.add_argument(
         "--base-url",
@@ -57,12 +57,12 @@ def main():
     parser.add_argument(
         "--success-path",
         default="supporttickets.php",
-        help="Path chứa trong URL khi đăng nhập thành công (để detect)",
+        help="Path contained in URL when login succeeds (for detection)",
     )
     parser.add_argument(
         "--api-url",
         default="",
-        help="API base URL (e.g. http://localhost:8000/v1) - nếu có sẽ POST cookies lên /admin/save-whmcs-cookies",
+        help="API base URL (e.g. http://localhost:8000/v1) - if set, POST cookies to /admin/save-whmcs-cookies",
     )
     parser.add_argument(
         "--api-key",
@@ -73,7 +73,7 @@ def main():
         "--timeout",
         type=int,
         default=300,
-        help="Thời gian chờ đăng nhập (giây), mặc định 5 phút",
+        help="Login wait timeout (seconds), default 5 minutes",
     )
     args = parser.parse_args()
 
@@ -81,18 +81,18 @@ def main():
     login_url = f"{base}/{args.login_path.lstrip('/')}"
     success_path = args.success_path
 
-    # Trong Docker không có display - script cần chạy trên máy local
+    # No display in Docker - script must run on local machine
     in_docker = Path("/.dockerenv").exists()
     if in_docker:
-        print("Script này cần chạy trên máy local (có màn hình), không chạy trong Docker.")
-        print("Chạy từ thư mục project trên máy của bạn:")
+        print("This script must run on local machine (with display), not in Docker.")
+        print("Run from project folder on your machine:")
         print(f"  python scripts/whmcs_login_browser.py --api-url http://localhost:8000/v1 --api-key dev-key")
-        print("(Đảm bảo API đang chạy và port 8000 được map từ Docker nếu dùng Docker.)")
+        print("(Ensure API is running and port 8000 is mapped from Docker if using Docker.)")
         sys.exit(1)
 
-    print(f"Mở trình duyệt: {login_url}")
-    print("→ Đăng nhập thủ công (giải CAPTCHA nếu có). Script sẽ tự lấy cookies khi chuyển sang trang ticket.")
-    print("  (Chạy từ thư mục gốc project: cd auto-reply-chatbot)")
+    print(f"Opening browser: {login_url}")
+    print("→ Log in manually (solve CAPTCHA if any). Script will fetch cookies when you reach ticket page.")
+    print("  (Run from project root: cd auto-reply-chatbot)")
     print()
 
     with sync_playwright() as p:
@@ -107,21 +107,21 @@ def main():
         page = context.new_page()
         page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
 
-        # Chờ user đăng nhập - URL chuyển sang chứa success_path (vd supporttickets)
+        # Wait for user to log in - URL changes to contain success_path (e.g. supporttickets)
         try:
             page.wait_for_url(
                 lambda u: success_path in u,
                 timeout=args.timeout * 1000,
             )
         except Exception as e:
-            print(f"Timeout hoặc lỗi: {e}")
-            print("Đảm bảo đã đăng nhập thành công và chuyển sang trang ticket.")
+            print(f"Timeout or error: {e}")
+            print("Ensure you logged in successfully and reached the ticket page.")
             browser.close()
             sys.exit(1)
 
-        # Lấy cookies
+        # Get cookies
         raw_cookies = context.cookies()
-        # Chuyển sang format giống EditThisCookie
+        # Convert to EditThisCookie-like format
         cookies = []
         for c in raw_cookies:
             cookies.append({
@@ -137,15 +137,15 @@ def main():
         browser.close()
 
     if not cookies:
-        print("Không lấy được cookie.")
+        print("Failed to get cookies.")
         sys.exit(1)
 
-    print(f"Đã lấy {len(cookies)} cookies.")
+    print(f"Got {len(cookies)} cookies.")
 
     if args.api_url:
         if not httpx:
-            print("Cần cài httpx: pip install httpx")
-            print("Hoặc chạy không có --api-url để in cookies ra, rồi paste vào app.")
+            print("Install httpx: pip install httpx")
+            print("Or run without --api-url to print cookies, then paste into app.")
             sys.exit(1)
         api_base = args.api_url.rstrip("/")
         url = f"{api_base}/admin/save-whmcs-cookies"
@@ -161,13 +161,13 @@ def main():
             )
             r.raise_for_status()
             data = r.json()
-            print(f"Đã gửi cookies lên API: {data.get('count', 0)} cookies đã lưu.")
+            print(f"Sent cookies to API: {data.get('count', 0)} cookies saved.")
         except Exception as e:
-            print(f"Gửi API thất bại: {e}")
-            print("Cookies (paste thủ công):")
+            print(f"API send failed: {e}")
+            print("Cookies (paste manually):")
             print(json.dumps(cookies, indent=2, ensure_ascii=False))
     else:
-        print("Cookies (copy và dán vào ô Session Cookies trong app):")
+        print("Cookies (copy and paste into Session Cookies field in app):")
         print(json.dumps(cookies, indent=2, ensure_ascii=False))
 
 

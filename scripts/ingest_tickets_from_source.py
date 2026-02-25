@@ -82,6 +82,7 @@ async def run_ingest(tickets: list[dict], skip_existing: bool = True) -> dict:
                         name=t.get("name"),
                         ticket_metadata=t.get("metadata"),
                         source_file=t.get("source_file"),
+                        approval_status="approved",  # Tickets from file are pre-approved
                     )
                     session.add(ticket)
                     await session.commit()

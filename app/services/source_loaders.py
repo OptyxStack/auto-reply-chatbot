@@ -143,6 +143,43 @@ def load_sales_kb_json(path: Path) -> list[dict[str, Any]]:
     return docs
 
 
+def load_tickets_json(path: Path) -> list[dict[str, Any]]:
+    """Load tickets.json and convert to document format for vector/RAG ingestion."""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    docs = []
+    for t in data.get("tickets", []):
+        ticket_id = t.get("id") or t.get("external_id")
+        if not ticket_id:
+            continue
+        url = f"ticket://{ticket_id}"
+        subject = (t.get("subject") or "").strip().split("\n")[0][:200]
+        parts = [f"Subject: {subject}"]
+        if t.get("description"):
+            parts.append(f"Content:\n{t['description']}")
+        metadata = t.get("metadata") or {}
+        replies = metadata.get("replies", [])
+        staff_replies = [r for r in replies if r.get("role") == "staff" and r.get("content")]
+        if staff_replies:
+            parts.append("Staff replies:")
+            for r in staff_replies[:5]:
+                parts.append((r.get("content") or "").strip())
+        text = "\n\n".join(parts)
+        if len(text) < 50:
+            continue
+        docs.append({
+            "url": url,
+            "source_url": url,
+            "title": subject or f"Ticket {ticket_id}",
+            "raw_text": text,
+            "content": text,
+            "doc_type": "ticket",
+            "metadata": {"ticket_id": str(ticket_id), "source": data.get("source", "")},
+            "source_file": path.name,
+        })
+    return docs
+
+
 LOADERS: dict[str, Any] = {
     "sample_docs.json": load_pages_json,
     "green_cloud_docs_full.json": load_pages_json,
@@ -152,6 +189,7 @@ LOADERS: dict[str, Any] = {
     "greencloudvps_terms_of_service.json": load_pages_json,
     "greencloud_chatbot_master.json": load_sales_kb_json,
     "custom_docs.json": load_pages_json,
+    "tickets.json": load_tickets_json,
 }
 
 

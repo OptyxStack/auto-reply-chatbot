@@ -34,7 +34,7 @@ async def verify_admin_api_key(
     api_key: Annotated[str | None, Depends(api_key_header)],
 ) -> str:
     """Verify admin API key for ingest/admin endpoints.
-    Accepts either X-Admin-API-Key or X-API-Key (dùng chung một key)."""
+    Accepts either X-Admin-API-Key or X-API-Key (shared key)."""
     settings = get_settings()
     if not settings.admin_api_key:
         return "admin_dev"

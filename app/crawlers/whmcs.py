@@ -2,9 +2,9 @@
 
 Flow:
 1. Login (if credentials provided)
-2. Mỗi list page: lấy IDs → crawl detail ngay (supporttickets.php?action=view&id=XXX) → sang list page tiếp
-3. ticket_queue: put mỗi ticket ngay khi crawl xong (save DB async)
-4. Bỏ qua ticket cảnh báo hệ thống (Monitor, Hypervisor, cpu usage, load average, Server Reboot) - lưu ID vào skipped list
+2. Each list page: get IDs → crawl detail immediately (supporttickets.php?action=view&id=XXX) → move to next list page
+3. ticket_queue: put each ticket as soon as crawl finishes (save DB async)
+4. Skip system alert tickets (Monitor, Hypervisor, cpu usage, load average, Server Reboot) - save ID to skipped list
 5. Return list of ticket dicts
 """
 
@@ -32,7 +32,7 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Ticket subject patterns = system alerts/notifications → skip crawl, lưu ID vào skipped list
+# Ticket subject patterns = system alerts/notifications → skip crawl, save ID to skipped list
 _SKIP_PATTERNS = (
     "monitor is down",
     "monitor is up",
@@ -45,21 +45,21 @@ _SKIP_PATTERNS = (
 
 
 def _is_system_alert_ticket(subject: str | None) -> bool:
-    """True nếu subject là ticket cảnh báo hệ thống (Monitor, Hypervisor, cpu/load)."""
+    """True if subject is a system alert ticket (Monitor, Hypervisor, cpu/load)."""
     if not subject or not subject.strip():
         return False
     s = subject.lower().strip()
     for pat in _SKIP_PATTERNS:
         if pat in s:
             return True
-    # CLOSED - / OPEN - kèm theo tên server (ví dụ: CLOSED - SG2- MILAN3 - 96.9.210.15 load average)
+    # CLOSED - / OPEN - with server name (e.g. CLOSED - SG2- MILAN3 - 96.9.210.15 load average)
     if ("closed - " in s or "open - " in s) and ("cpu usage" in s or "load average" in s):
         return True
     return False
 
 
 def _get_skipped_tickets_path() -> Path:
-    """Đường dẫn file lưu danh sách ticket ID bị skip."""
+    """Path to file storing skipped ticket IDs."""
     for base in (Path("/app"), Path.cwd()):
         candidate = base / "source" / "skipped_ticket_ids.json"
         if candidate.parent.exists():
@@ -68,7 +68,7 @@ def _get_skipped_tickets_path() -> Path:
 
 
 def _load_skipped_ids() -> set[str]:
-    """Load set các ticket ID đã skip từ file."""
+    """Load set of skipped ticket IDs from file."""
     path = _get_skipped_tickets_path()
     if not path.exists():
         return set()
@@ -82,7 +82,7 @@ def _load_skipped_ids() -> set[str]:
 
 
 def _save_skipped_id(tid: str, existing: set[str]) -> None:
-    """Thêm ticket ID vào danh sách skip và ghi file."""
+    """Add ticket ID to skip list and write to file."""
     existing.add(tid)
     path = _get_skipped_tickets_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,7 +201,7 @@ def _login_if_needed(page: Page, config: WHMCSConfig) -> bool:
 
 def _collect_ticket_ids_from_page(page: Page, base_url: str) -> list[str]:
     """
-    Extract ticket IDs from current list page (chỉ lấy id, không lấy nội dung).
+    Extract ticket IDs from current list page (IDs only, no content).
     WHMCS table: <a href="supporttickets.php?action=view&id=XXX">
     """
     ids: list[str] = []
@@ -220,7 +220,7 @@ def _collect_ticket_ids_from_page(page: Page, base_url: str) -> list[str]:
 
 
 def _is_list_url(url: str) -> bool:
-    """URL là trang list (filter=1&page=N), không phải trang detail (action=view&id=)."""
+    """URL is list page (filter=1&page=N), not detail page (action=view&id=)."""
     return "action=view" not in url and ("filter=" in url or "page=" in url)
 
 
@@ -233,9 +233,9 @@ def _get_next_page_url(
     current_page_num: int | None = None,
 ) -> str | None:
     """
-    Find next pagination URL. Chỉ dùng list URL (filter=1&page=N).
-    Bỏ qua link action=view (trang detail ticket) - Next button có thể trỏ sai.
-    current_page_num: dùng khi current_url là detail page (không có page param).
+    Find next pagination URL. Use list URL only (filter=1&page=N).
+    Ignore action=view links (ticket detail page) - Next button may point wrong.
+    current_page_num: used when current_url is detail page (no page param).
     """
     if current_page_num is not None:
         page_num = current_page_num
@@ -245,7 +245,7 @@ def _get_next_page_url(
         page_num = int(curr_params.get("page", ["1"])[0])
     next_num = page_num + 1
 
-    # 1. Tìm link pagination: supporttickets + page=N, KHÔNG phải action=view
+    # 1. Find pagination link: supporttickets + page=N, NOT action=view
     pagination_links = page.query_selector_all('a[href*="supporttickets"][href*="page="]')
     for a in pagination_links:
         href = a.get_attribute("href")
@@ -258,7 +258,7 @@ def _get_next_page_url(
         if p.get("page") and p.get("page")[0] == str(next_num):
             return resolved
 
-    # 2. Next link - chỉ dùng nếu là list URL (không phải action=view)
+    # 2. Next link - only use if it's list URL (not action=view)
     next_link = page.query_selector('a:has-text("Next"), a:has-text("»"), a[rel="next"]')
     if next_link:
         href = next_link.get_attribute("href")
@@ -267,7 +267,7 @@ def _get_next_page_url(
             if "supporttickets" in resolved and _is_list_url(resolved):
                 return resolved
 
-    # 3. Build thủ công: filter=1&page=N
+    # 3. Build manually: filter=1&page=N
     list_url = _full_url(base_url, list_path)
     parsed = urlparse(list_url)
     params = dict(parse_qs(parsed.query))
@@ -282,9 +282,9 @@ def _crawl_list_and_details(
     ticket_queue: queue.Queue | None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
-    Crawl list page → lấy IDs → crawl detail từng ticket ngay → sang list page tiếp.
-    Mỗi list page xong thì crawl content luôn, không đợi hết list.
-    Bỏ qua ticket đã có trong skipped_ids; ticket mới match system alert → thêm vào skipped, không lưu DB.
+    Crawl list page → get IDs → crawl each ticket detail immediately → move to next list page.
+    For each list page, crawl content right away, don't wait for full list.
+    Skip tickets already in skipped_ids; new tickets matching system alert → add to skipped, don't save to DB.
     """
     tickets: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -304,7 +304,7 @@ def _crawl_list_and_details(
         ids = _collect_ticket_ids_from_page(page, config.base_url)
         added = 0
 
-        # Crawl detail ngay cho từng ID mới từ list page này
+        # Crawl detail immediately for each new ID from this list page
         for tid in ids:
             if tid in seen_ids:
                 continue
@@ -386,8 +386,8 @@ def _extract_ticket_id_from_url(url: str) -> str | None:
 
 def _extract_replies_from_page(page: Page) -> list[dict[str, Any]]:
     """
-    Tách nội dung hội thoại từ div.reply.
-    Mỗi reply: requestor-name, role (staff/owner), message content, postedon.
+    Extract conversation content from div.reply.
+    Each reply: requestor-name, role (staff/owner), message content, postedon.
     """
     replies: list[dict[str, Any]] = []
     reply_els = page.query_selector_all("div.reply")
@@ -424,7 +424,7 @@ def _extract_replies_from_page(page: Page) -> list[dict[str, Any]]:
 
 
 def _extract_ticket_detail(page: Page, detail_url: str) -> dict[str, Any]:
-    """Lấy nội dung ticket từ trang chi tiết supporttickets.php?action=view&id=XXX."""
+    """Get ticket content from detail page supporttickets.php?action=view&id=XXX."""
     page.goto(detail_url, wait_until="networkidle", timeout=30000)
 
     ticket_id = _extract_ticket_id_from_url(detail_url) or "unknown"
@@ -437,7 +437,7 @@ def _extract_ticket_detail(page: Page, detail_url: str) -> dict[str, Any]:
         if subj_text and len(subj_text) > 2:
             subject = subj_text
 
-    # Hội thoại: div.reply -> replies[]
+    # Conversation: div.reply -> replies[]
     replies = _extract_replies_from_page(page)
     description_parts: list[str] = []
     for r in replies:
@@ -458,7 +458,7 @@ def _extract_ticket_detail(page: Page, detail_url: str) -> dict[str, Any]:
     if prio_el:
         priority = prio_el.inner_text().strip()[:32]
 
-    # Email từ reply đầu (owner)
+    # Email from first reply (owner)
     email = None
     email_el = page.query_selector(".submitter a[href^='mailto:']")
     if email_el:
@@ -557,7 +557,7 @@ def check_whmcs_cookies(
         try:
             cookies = _build_cookies_for_playwright(session_cookies, base)
             if not cookies:
-                return False, "Không có cookie hợp lệ", debug_info if debug else None
+                return False, "No valid cookies", debug_info if debug else None
 
             if debug:
                 debug_info["cookies_added"] = [
@@ -583,18 +583,18 @@ def check_whmcs_cookies(
 
             # Redirected to login = auth failed
             if "login" in final_url.lower() or "redirect=supporttickets" in final_url:
-                return False, f"Chưa đăng nhập được (redirect về {final_url[:80]}...)", debug_info if debug else None
+                return False, f"Login failed (redirected to {final_url[:80]}...)", debug_info if debug else None
 
             # Check for login form on page
             login_form = page.query_selector('input[name="username"], input[name="email"], input[type="email"]')
             if login_form:
                 if debug:
                     debug_info["has_login_form"] = True
-                return False, "Trang hiển thị form đăng nhập – cookies hết hạn hoặc không hợp lệ", debug_info if debug else None
+                return False, "Page shows login form – cookies expired or invalid", debug_info if debug else None
 
             if debug:
                 debug_info["has_login_form"] = False
-            return True, "Kết nối thành công", debug_info if debug else None
+            return True, "Connection successful", debug_info if debug else None
         except Exception as e:
             logger.warning("whmcs_check_cookies_failed", error=str(e))
             if debug:
@@ -609,8 +609,8 @@ def crawl_whmcs_tickets(
     ticket_queue: queue.Queue | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """
-    Crawl WHMCS tickets: mỗi list page → lấy IDs → crawl detail ngay → sang list page tiếp.
-    ticket_queue: put mỗi ticket ngay khi crawl xong (để save DB ngay).
+    Crawl WHMCS tickets: each list page → get IDs → crawl detail immediately → move to next list page.
+    ticket_queue: put each ticket as soon as crawl finishes (to save to DB immediately).
     """
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=config.headless)

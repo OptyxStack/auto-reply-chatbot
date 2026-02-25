@@ -263,8 +263,20 @@ class CrawlTicketsResponse(BaseModel):
     status: str = "ok"
     count: int = Field(..., description="Number of tickets crawled and saved")
     skipped: int = Field(0, description="Number of system-alert tickets skipped this run")
-    saved_to: str = Field(..., description="Path to saved JSON file")
+    saved_to: str = Field(..., description="'database' or path to saved JSON file")
     tickets: list[dict[str, Any]] = Field(default_factory=list, description="Crawled ticket data")
+
+
+class TicketApprovalUpdateRequest(BaseModel):
+    approval_status: Literal["pending", "approved", "rejected"] = Field(
+        ..., description="pending=not yet approved, approved=approved, rejected=rejected"
+    )
+
+
+class IngestTicketsToFileResponse(BaseModel):
+    status: str = "ok"
+    path: str = Field(..., description="Path to tickets.json")
+    count: int = Field(..., description="Number of approved tickets exported")
 
 
 # --- Health ---

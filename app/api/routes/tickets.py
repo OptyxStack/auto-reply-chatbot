@@ -16,6 +16,7 @@ async def list_tickets(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(None, description="Filter by status"),
+    approval_status: str | None = Query(None, description="Filter by approval: pending, approved, rejected"),
     q: str | None = Query(None, description="Search in subject, description"),
     db: AsyncSession = Depends(get_db),
     _auth: str = Depends(verify_api_key),
@@ -24,10 +25,12 @@ async def list_tickets(
     offset = (page - 1) * page_size
     base = select(Ticket)
     count_base = select(func.count()).select_from(Ticket)
-
     if status and status.strip():
         base = base.where(Ticket.status.ilike(f"%{status.strip()}%"))
         count_base = count_base.where(Ticket.status.ilike(f"%{status.strip()}%"))
+    if approval_status and approval_status.strip():
+        base = base.where(Ticket.approval_status == approval_status.strip())
+        count_base = count_base.where(Ticket.approval_status == approval_status.strip())
     if q and q.strip():
         search = f"%{q.strip()}%"
         base = base.where(or_(Ticket.subject.ilike(search), Ticket.description.ilike(search)))
@@ -50,6 +53,7 @@ async def list_tickets(
             "priority": r.priority,
             "email": r.email,
             "name": r.name,
+            "approval_status": r.approval_status,
             "metadata": r.ticket_metadata,
             "source_file": r.source_file,
             "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -91,6 +95,7 @@ async def get_ticket(
         "client_id": row.client_id,
         "email": row.email,
         "name": row.name,
+        "approval_status": row.approval_status,
         "metadata": row.ticket_metadata,
         "source_file": row.source_file,
         "detail_url": detail_url,

@@ -201,7 +201,8 @@ class AnswerService:
 
             # Build messages
             max_chars = self._settings.llm_max_evidence_chars
-            user_content = f"User question: {query}\n\nEvidence:\n{_format_evidence_for_prompt(evidence, max_chars)}"
+            evidence_block = _format_evidence_for_prompt(evidence, max_chars)
+            user_content = f"User question: {query}\n\nEvidence:\n{evidence_block}"
             messages = [{"role": "system", "content": get_system_prompt()}]
             if conversation_history:
                 for m in conversation_history[-4:]:  # Last 4 messages (fit 16k context)

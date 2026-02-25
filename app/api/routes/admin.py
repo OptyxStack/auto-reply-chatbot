@@ -19,16 +19,18 @@ from app.api.schemas import (
     IngestDocument,
     IngestRequest,
     IngestResponse,
+    IngestTicketsToFileResponse,
     IntentCreateRequest,
     IntentResponse,
     IntentUpdateRequest,
     SaveWhmcsCookiesRequest,
     SaveWhmcsCookiesResponse,
+    TicketApprovalUpdateRequest,
     WHMCS_COOKIES_KEY,
 )
 from app.core.auth import verify_admin_api_key
 from app.core.logging import get_logger
-from app.db.models import AppConfig, Intent
+from app.db.models import AppConfig, Intent, Ticket
 from app.db.session import get_db
 from app.services.branding_config import refresh_cache
 
@@ -167,7 +169,7 @@ async def api_check_whmcs_cookies(
     if not session_cookies or len(session_cookies) == 0:
         raise HTTPException(
             status_code=400,
-            detail="Lưu cookies trước hoặc gửi session_cookies trong body.",
+            detail="Save cookies first or send session_cookies in body.",
         )
 
     from app.crawlers.whmcs import check_whmcs_cookies as do_check
@@ -234,7 +236,7 @@ async def crawl_tickets(
     if not has_cookies and not has_creds:
         raise HTTPException(
             status_code=400,
-            detail="Lưu cookies trước (Save cookies) hoặc cung cấp username+password.",
+            detail="Save cookies first (Save cookies) or provide username+password.",
         )
 
     from app.crawlers.whmcs import WHMCSConfig, crawl_whmcs_tickets
@@ -243,7 +245,7 @@ async def crawl_tickets(
     ticket_queue: queue.Queue = queue.Queue()
 
     async def _save_worker():
-        """Lưu từng ticket vào DB ngay khi crawl xong."""
+        """Save each ticket to DB as soon as crawl finishes."""
         saved = 0
         while True:
             try:
@@ -278,45 +280,89 @@ async def crawl_tickets(
         logger.error("crawl_tickets_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
-    # Save to source/tickets.json
-    source_dir = Path.cwd() / "source"
-    if not source_dir.exists():
-        for base in (Path("/app"), Path.cwd()):
-            candidate = base / "source"
-            if candidate.exists():
-                source_dir = candidate
-                break
-    source_dir.mkdir(parents=True, exist_ok=True)
-    out_path = source_dir / "tickets.json"
-
-    data = {
-        "source": "whmcs",
-        "crawled_from": body.base_url,
-        "tickets": [
-            {
-                "external_id": t["external_id"],
-                "subject": t["subject"],
-                "description": t.get("description", ""),
-                "status": t.get("status", "Open"),
-                "priority": t.get("priority"),
-                "client_id": t.get("client_id"),
-                "email": t.get("email"),
-                "name": t.get("name"),
-                "detail_url": t.get("detail_url"),
-                "metadata": t.get("metadata"),
-            }
-            for t in tickets
-        ],
-    }
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
+    # Crawl only saves to DB. Use ingest-tickets-to-file endpoint to export approved tickets to file.
     return CrawlTicketsResponse(
         status="ok",
         count=len(tickets),
         skipped=skipped,
-        saved_to=str(out_path),
+        saved_to="database",
         tickets=tickets,
+    )
+
+
+@router.patch("/tickets/{ticket_id}/approval")
+async def update_ticket_approval(
+    ticket_id: str,
+    body: TicketApprovalUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Update ticket approval status: pending, approved, rejected."""
+    result = await db.execute(select(Ticket).where(Ticket.id == ticket_id).limit(1))
+    row = result.scalar_one_or_none()
+    if not row:
+        result = await db.execute(select(Ticket).where(Ticket.external_id == ticket_id).limit(1))
+        row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    row.approval_status = body.approval_status
+    await db.commit()
+    return {"status": "ok", "approval_status": body.approval_status}
+
+
+@router.post("/ingest-tickets-to-file", response_model=IngestTicketsToFileResponse)
+async def ingest_tickets_to_file(
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Export approved tickets (approval_status=approved) to source/tickets.json. Only approved tickets are used."""
+    from datetime import datetime, timezone
+
+    from app.services.ticket_sync import _resolve_source_dir
+
+    result = await db.execute(
+        select(Ticket).where(Ticket.approval_status == "approved").order_by(Ticket.updated_at.desc())
+    )
+    rows = result.scalars().all()
+
+    source_dir = _resolve_source_dir()
+    source_dir.mkdir(parents=True, exist_ok=True)
+    out_path = source_dir / "tickets.json"
+
+    def _row_to_dict(r):
+        meta = dict(r.ticket_metadata or {})
+        return {
+            "id": r.id,
+            "external_id": r.external_id,
+            "subject": r.subject,
+            "description": r.description or "",
+            "status": r.status,
+            "priority": r.priority,
+            "client_id": r.client_id,
+            "email": r.email,
+            "name": r.name,
+            "detail_url": meta.get("detail_url"),
+            "metadata": meta,
+        }
+
+    data = {
+        "source": "whmcs",
+        "ingested_at": datetime.now(timezone.utc).isoformat(),
+        "tickets_count": len(rows),
+        "tickets": [_row_to_dict(r) for r in rows],
+    }
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        logger.info("ingest_tickets_to_file_ok", path=str(out_path), count=len(rows))
+    except OSError as e:
+        logger.warning("ingest_tickets_to_file_failed", path=str(out_path), error=str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to write file: {e}")
+
+    return IngestTicketsToFileResponse(
+        status="ok",
+        path=str(out_path),
+        count=len(rows),
     )
 
 

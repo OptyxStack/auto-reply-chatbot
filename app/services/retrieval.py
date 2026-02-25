@@ -54,8 +54,8 @@ class RetrievalService:
         if not conversation_history or len(conversation_history) < 2:
             return query
         # Build context from last exchange: extract key terms from assistant's prior answer
-        # e.g. User: "VPS plans?" -> Assistant: "We have Pro, Basic..." -> User: "Giá?"
-        # -> "VPS plans Pro Basic giá pricing"
+        # e.g. User: "VPS plans?" -> Assistant: "We have Pro, Basic..." -> User: "Price?"
+        # -> "VPS plans Pro Basic price pricing"
         context_terms: list[str] = []
         for m in conversation_history[-4:]:
             content = (m.get("content") or "").strip()
@@ -87,15 +87,15 @@ class RetrievalService:
         q = semantic_query.lower()
         keyword_query = semantic_query
         # Expand "VPS plans" type queries for better BM25 hits on pricing docs
-        if any(kw in q for kw in ["plan", "plans", "price", "pricing", "vps", "offer", "cost", "giá", "link"]):
+        if any(kw in q for kw in ["plan", "plans", "price", "pricing", "vps", "offer", "cost", "link"]):
             extras = []
             if "plan" in q or "plans" in q or "link" in q:
                 extras.extend(["pricing", "budget", "windows vps", "kvm vps", "storage", "order", "store"])
-            if "price" in q or "cost" in q or "giá" in q:
+            if "price" in q or "cost" in q:
                 extras.extend(["USD", "monthly", "annually", "pricing"])
-            if "refund" in q or "hoàn" in q or "return" in q:
+            if "refund" in q or "return" in q:
                 extras.extend(["policy", "terms", "30 days"])
-            if "support" in q or "help" in q or "hỗ trợ" in q:
+            if "support" in q or "help" in q:
                 extras.extend(["contact", "email", "FAQ"])
             if extras:
                 keyword_query = f"{semantic_query} {' '.join(extras[:4])}"

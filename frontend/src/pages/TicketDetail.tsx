@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useParams, Link } from 'react-router-dom'
-import { tickets, type TicketDetail } from '../api/client'
+import { useParams, Link, useNavigate } from 'react-router-dom'
+import { tickets, conversations, type TicketDetail } from '../api/client'
 import {
   ArrowLeft,
   Loader2,
@@ -10,6 +10,7 @@ import {
   Calendar,
   Tag,
   MessageSquare,
+  MessageCirclePlus,
 } from 'lucide-react'
 
 interface Reply {
@@ -21,9 +22,11 @@ interface Reply {
 
 export default function TicketDetail() {
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const [ticket, setTicket] = useState<TicketDetail | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [startingConv, setStartingConv] = useState(false)
 
   const load = async () => {
     if (!id) return
@@ -43,13 +46,27 @@ export default function TicketDetail() {
     load()
   }, [id])
 
+  const handleStartConversation = async () => {
+    if (!ticket) return
+    setStartingConv(true)
+    try {
+      const sourceId = ticket.id
+      const conv = await conversations.create('ticket', sourceId)
+      navigate(`/conversations/${conv.id}`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create conversation')
+    } finally {
+      setStartingConv(false)
+    }
+  }
+
   if (!id) return null
 
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-20 text-muted animate-fade-in">
         <Loader2 size={20} className="animate-spin-slow" />
-        <span>Đang tải ticket...</span>
+        <span>Loading ticket...</span>
       </div>
     )
   }
@@ -64,7 +81,7 @@ export default function TicketDetail() {
           to="/tickets"
           className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-zinc-100"
         >
-          <ArrowLeft size={16} /> Quay lại danh sách tickets
+          <ArrowLeft size={16} /> Back to ticket list
         </Link>
       </div>
     )
@@ -88,7 +105,7 @@ export default function TicketDetail() {
         </Link>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-lg font-semibold truncate">{ticket.subject || '(Không có tiêu đề)'}</h1>
+            <h1 className="text-lg font-semibold truncate">{ticket.subject || '(No subject)'}</h1>
             <code className="text-xs text-accent bg-accent-muted px-1.5 py-0.5 rounded font-mono">
               {ticket.external_id || ticket.id.slice(0, 8)}
             </code>
@@ -99,9 +116,18 @@ export default function TicketDetail() {
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-xs text-accent hover:text-accent-hover"
               >
-                <ExternalLink size={14} /> Mở trong WHMCS
+                <ExternalLink size={14} /> Open in WHMCS
               </a>
             )}
+            <button
+              onClick={handleStartConversation}
+              disabled={startingConv}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent text-white text-xs font-medium
+                         hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {startingConv ? <Loader2 size={14} className="animate-spin" /> : <MessageCirclePlus size={14} />}
+              Start conversation
+            </button>
           </div>
           <div className="flex items-center gap-3 text-xs text-muted mt-1 flex-wrap">
             <span className="inline-flex items-center gap-1">
@@ -111,7 +137,7 @@ export default function TicketDetail() {
             {ticket.priority && (
               <>
                 <span>&middot;</span>
-                <span>Ưu tiên: {ticket.priority}</span>
+                <span>Priority: {ticket.priority}</span>
               </>
             )}
             {ticket.updated_at && (
@@ -136,7 +162,7 @@ export default function TicketDetail() {
         <div className="lg:col-span-2 space-y-6">
           {ticket.description && (
             <section className="bg-surface border border-border rounded-xl p-4">
-              <h2 className="text-sm font-medium text-muted mb-2">Mô tả / Nội dung chính</h2>
+              <h2 className="text-sm font-medium text-muted mb-2">Description / Main content</h2>
               <div className="text-sm text-zinc-300 whitespace-pre-wrap">{ticket.description}</div>
             </section>
           )}
@@ -145,7 +171,7 @@ export default function TicketDetail() {
             <section className="bg-surface border border-border rounded-xl overflow-hidden">
               <h2 className="text-sm font-medium text-muted px-4 py-3 border-b border-border flex items-center gap-2">
                 <MessageSquare size={16} />
-                Hội thoại ({replies.length})
+                Conversation ({replies.length})
               </h2>
               <div className="divide-y divide-border">
                 {replies.map((r, i) => (
@@ -177,7 +203,7 @@ export default function TicketDetail() {
 
         <div className="space-y-4">
           <section className="bg-surface border border-border rounded-xl p-4">
-            <h2 className="text-sm font-medium text-muted mb-3">Thông tin khách hàng</h2>
+            <h2 className="text-sm font-medium text-muted mb-3">Customer info</h2>
             <div className="space-y-2 text-sm">
               {ticket.name && (
                 <div className="flex items-center gap-2 text-zinc-300">
@@ -202,7 +228,7 @@ export default function TicketDetail() {
                 </div>
               )}
               {!ticket.name && !ticket.email && (
-                <p className="text-muted text-sm">Không có thông tin</p>
+                <p className="text-muted text-sm">No information</p>
               )}
             </div>
           </section>
@@ -210,11 +236,11 @@ export default function TicketDetail() {
           <section className="bg-surface border border-border rounded-xl p-4">
             <h2 className="text-sm font-medium text-muted mb-2">Metadata</h2>
             <div className="text-xs text-muted space-y-1">
-              {ticket.source_file && <p>Nguồn: {ticket.source_file}</p>}
+              {ticket.source_file && <p>Source: {ticket.source_file}</p>}
               {ticket.created_at && (
                 <p className="flex items-center gap-1">
                   <Calendar size={12} />
-                  Tạo: {new Date(ticket.created_at).toLocaleString('en-US')}
+                  Created: {new Date(ticket.created_at).toLocaleString('en-US')}
                 </p>
               )}
             </div>
