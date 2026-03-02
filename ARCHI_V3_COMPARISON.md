@@ -1,191 +1,191 @@
-# So sánh archi_v3 vs PHUONG_AN_LLM_ORCHESTRATION – Ưu nhược & Điều chỉnh kế hoạch
+# Comparison: archi_v3 vs PHUONG_AN_LLM_ORCHESTRATION – Pros, Cons & Plan Adjustments
 
-## 1. Có nên upgrade sang archi_v3 không?
+## 1. Should we upgrade to archi_v3?
 
-**Kết luận: Có, nên upgrade.** archi_v3 thiết kế rõ ràng hơn, tách bạch LLM vs Deterministic, và phù hợp production.
+**Conclusion: Yes, we should upgrade.** archi_v3 has a clearer design, clean separation of LLM vs Deterministic, and is production-ready.
 
 ---
 
-## 2. So sánh chi tiết
+## 2. Detailed Comparison
 
-| Khía cạnh | archi_v3 | PHUONG_AN hiện tại |
-|-----------|----------|---------------------|
-| **Translation** | Gộp trong LLM Normalizer (1 step) | Language Gate riêng (detect + translate) |
-| **Orchestrator** | Không có – flow cố định | LLM Orchestrator (optional) |
-| **Normalizer** | LLM Normalizer: translate + QuerySpec trong 1 call | Normalizer + QuerySpec Review riêng |
+| Aspect | archi_v3 | Current PHUONG_AN |
+|--------|----------|-------------------|
+| **Translation** | Merged in LLM Normalizer (1 step) | Separate Language Gate (detect + translate) |
+| **Orchestrator** | None – fixed flow | LLM Orchestrator (optional) |
+| **Normalizer** | LLM Normalizer: translate + QuerySpec in 1 call | Normalizer + separate QuerySpec Review |
 | **Evidence** | LLM Evidence Evaluator → advise Retry Planner | Evidence Relevance Review → retry |
 | **Answer** | Generate → Self-Critic → Citation Validator → Final Polish | Generate → Answer Review |
-| **Translate-back** | Không (output luôn English) | Không |
-| **Retry** | Self-critic: max 1 regenerate | Review fail → retry hoặc ESCALATE |
+| **Translate-back** | No (output always English) | No |
+| **Retry** | Self-critic: max 1 regenerate | Review fail → retry or ESCALATE |
 
 ---
 
-## 3. Ưu điểm archi_v3
+## 3. Advantages of archi_v3
 
-| Ưu điểm | Chi tiết |
-|---------|----------|
-| **Gọn hơn** | Translation gộp trong Normalizer → ít step, ít LLM call |
-| **Rõ ràng** | Phân tách: LLM (hiểu, suy luận) vs Deterministic (an toàn, audit) |
-| **Self-Critic** | Generate → Self-Critic → regenerate 1 lần nếu fail → giới hạn retry |
-| **Final Polish** | Cải thiện clarity, structure, tone (không sửa nội dung thực tế) |
-| **Evidence Evaluator** | Chỉ advise, không override deterministic gate |
-| **Auditability** | Deterministic gates giữ nguyên, dễ trace |
-
----
-
-## 4. Nhược điểm / Rủi ro archi_v3
-
-| Nhược điểm | Giảm thiểu |
-|------------|------------|
-| **LLM Normalizer nặng** | Dùng model nhẹ (gpt-4o-mini), tối ưu prompt |
-| **Nhiều LLM call** | Bật/tắt từng bước qua config; cache khi có thể |
-| **Final Polish có thể lệch** | Prompt rõ: "Cannot modify factual content" |
-| **Self-critic + regenerate** | Giới hạn 1 lần regenerate, tránh loop |
+| Advantage | Details |
+|-----------|---------|
+| **More concise** | Translation merged in Normalizer → fewer steps, fewer LLM calls |
+| **Clearer** | Separation: LLM (understanding, reasoning) vs Deterministic (safe, auditable) |
+| **Self-Critic** | Generate → Self-Critic → regenerate once if fail → limited retry |
+| **Final Polish** | Improves clarity, structure, tone (does not modify factual content) |
+| **Evidence Evaluator** | Advises only, does not override deterministic gate |
+| **Auditability** | Deterministic gates remain intact, easy to trace |
 
 ---
 
-## 5. Điều chỉnh kế hoạch PHUONG_AN để align archi_v3
+## 4. Disadvantages / Risks of archi_v3
 
-### 5.1 Bỏ / Gộp
+| Disadvantage | Mitigation |
+|--------------|------------|
+| **Heavy LLM Normalizer** | Use lightweight model (gpt-4o-mini), optimize prompt |
+| **Many LLM calls** | Enable/disable each step via config; cache when possible |
+| **Final Polish may drift** | Clear prompt: "Cannot modify factual content" |
+| **Self-critic + regenerate** | Limit to 1 regenerate, avoid loop |
 
-| Bỏ | Lý do |
-|----|-------|
-| **Language Gate riêng** | Gộp vào LLM Normalizer |
-| **LLM Orchestrator** | archi_v3 dùng flow cố định, đơn giản hơn |
-| **QuerySpec Review riêng** | Tin LLM Normalizer; nếu cần có thể thêm lightweight check |
+---
 
-### 5.2 Thêm / Thay đổi
+## 5. Adjust PHUONG_AN Plan to Align with archi_v3
 
-| Thêm | Mô tả |
-|------|-------|
-| **LLM Normalizer language-aware** | Nhận `source_lang`, translate nội bộ nếu cần, output `canonical_query_en` + QuerySpec |
-| **LLM Evidence Evaluator** | Thay Evidence Review; output `relevance_score`, `coverage_gaps`, `retry_needed`, `suggested_query` – chỉ advise Retry Planner |
-| **LLM Self-Critic** | Sau Generate; check unsupported claims, incomplete; fail → regenerate 1 lần |
-| **Deterministic Citation Validator** | Giữ rule-based (đã có trong Reviewer) |
-| **LLM Final Polish** | Cải thiện clarity, structure, tone |
-| **Hybrid Decision Router** | Deterministic rules trước; gray zone → LLM quyết định; LLM không override ESCALATE |
+### 5.1 Remove / Merge
 
-### 5.3 Bỏ
+| Remove | Reason |
+|--------|--------|
+| **Separate Language Gate** | Merge into LLM Normalizer |
+| **LLM Orchestrator** | archi_v3 uses fixed flow, simpler |
+| **Separate QuerySpec Review** | Trust LLM Normalizer; add lightweight check if needed |
 
-| Bỏ | Lý do |
-|----|-------|
-| **Translate-back** | Output cho client luôn là English |
+### 5.2 Add / Change
 
-### 5.4 Giữ nguyên
+| Add | Description |
+|-----|-------------|
+| **Language-aware LLM Normalizer** | Accept `source_lang`, translate internally if needed, output `canonical_query_en` + QuerySpec |
+| **LLM Evidence Evaluator** | Replace Evidence Review; output `relevance_score`, `coverage_gaps`, `retry_needed`, `suggested_query` – advises Retry Planner only |
+| **LLM Self-Critic** | After Generate; check unsupported claims, incomplete; fail → regenerate once |
+| **Deterministic Citation Validator** | Keep rule-based (already in Reviewer) |
+| **LLM Final Polish** | Improve clarity, structure, tone |
+| **Hybrid Decision Router** | Deterministic rules first; gray zone → LLM decides; LLM cannot override ESCALATE |
+
+### 5.3 Remove
+
+| Remove | Reason |
+|--------|--------|
+| **Translate-back** | Output to client is always English |
+
+### 5.4 Keep Unchanged
 
 - Deterministic Evidence Quality Gate
-- Retrieval (Attempt 1 + 2, Retry Planner)  
-- Intent cache, skip_retrieval, ambiguous (có thể xử lý trong Normalizer)
+- Retrieval (Attempt 1 + 2, Retry Planner)
+- Intent cache, skip_retrieval, ambiguous (can be handled in Normalizer)
 
-### 5.5 Hybrid Decision Router (mới)
+### 5.5 Hybrid Decision Router (new)
 
-| Thành phần | Mô tả |
-|------------|-------|
-| **Deterministic trước** | High-risk + no policy → ESCALATE (bắt buộc); các rule cứng khác |
-| **LLM khi gray zone** | Quality gate pass nhưng evidence yếu; quality fail nhưng có partial info; risk không rõ |
-| **Ràng buộc** | LLM không được chuyển ESCALATE → PASS |
+| Component | Description |
+|-----------|-------------|
+| **Deterministic first** | High-risk + no policy → ESCALATE (mandatory); other hard rules |
+| **LLM for gray zone** | Quality gate pass but weak evidence; quality fail but partial info; unclear risk |
+| **Constraint** | LLM cannot change ESCALATE → PASS |
 
 ---
 
-## 6. Kế hoạch phát triển điều chỉnh (theo archi_v3)
+## 6. Adjusted Development Plan (per archi_v3)
 
-### Phase A: Language Detection + LLM Normalizer (2–3 ngày)
+### Phase A: Language Detection + LLM Normalizer (2–3 days)
 
-| Task | Mô tả |
-|------|-------|
-| A1 | Thêm `langdetect` (non-LLM) → `source_lang` |
-| A2 | Nâng cấp LLM Normalizer: nhận `source_lang`, translate nội bộ nếu ≠ en |
+| Task | Description |
+|------|-------------|
+| A1 | Add `langdetect` (non-LLM) → `source_lang` |
+| A2 | Upgrade LLM Normalizer: accept `source_lang`, translate internally if ≠ en |
 | A3 | Output: `canonical_query_en`, QuerySpec, `intent_cache_match`, `is_ambiguous`, `query_rewrites` |
-| A4 | Bỏ Language Gate riêng; tích hợp vào đầu pipeline |
+| A4 | Remove separate Language Gate; integrate at pipeline start |
 
-**Output:** Một LLM call cho: detect + translate (nếu cần) + QuerySpec.
+**Output:** One LLM call for: detect + translate (if needed) + QuerySpec.
 
 ---
 
-### Phase B: LLM Evidence Evaluator (1–2 ngày)
+### Phase B: LLM Evidence Evaluator (1–2 days)
 
-| Task | Mô tả |
-|------|-------|
-| B1 | Prompt: đánh giá relevance, coverage gaps, retry_needed, suggested_query |
+| Task | Description |
+|------|-------------|
+| B1 | Prompt: evaluate relevance, coverage gaps, retry_needed, suggested_query |
 | B2 | Output schema: `{ relevance_score, coverage_gaps, retry_needed, suggested_query }` |
-| B3 | Chỉ advise: Retry Planner dùng `suggested_query` khi retry_needed |
-| B4 | Deterministic Quality Gate vẫn quyết định pass/fail |
+| B3 | Advise only: Retry Planner uses `suggested_query` when retry_needed |
+| B4 | Deterministic Quality Gate still decides pass/fail |
 
-**Output:** LLM Evidence Evaluator bổ sung input cho Retry Planner.
+**Output:** LLM Evidence Evaluator supplements input for Retry Planner.
 
 ---
 
-### Phase C: LLM Self-Critic + Regenerate (2 ngày)
+### Phase C: LLM Self-Critic + Regenerate (2 days)
 
-| Task | Mô tả |
-|------|-------|
+| Task | Description |
+|------|-------------|
 | C1 | Prompt: check unsupported claims, incomplete, hallucination |
 | C2 | Output: `{ pass, issues, suggested_fix }` |
-| C3 | Fail → regenerate 1 lần với feedback (max 2 generation attempts) |
-| C4 | Deterministic Citation Validator sau Generate (giữ logic hiện tại) |
+| C3 | Fail → regenerate once with feedback (max 2 generation attempts) |
+| C4 | Deterministic Citation Validator after Generate (keep current logic) |
 
-**Output:** Self-Critic + 1 lần regenerate nếu fail.
+**Output:** Self-Critic + 1 regenerate if fail.
 
 ---
 
-### Phase D: LLM Final Polish (1 ngày)
+### Phase D: LLM Final Polish (1 day)
 
-| Task | Mô tả |
-|------|-------|
-| D1 | Prompt: cải thiện clarity, structure, tone; không sửa factual content |
-| D2 | Chạy sau Citation Validator |
+| Task | Description |
+|------|-------------|
+| D1 | Prompt: improve clarity, structure, tone; do not modify factual content |
+| D2 | Run after Citation Validator |
 | D3 | Config: `final_polish_enabled` |
 
-**Output:** Answer được polish trước khi trả về.
+**Output:** Answer is polished before returning.
 
 ---
 
-### Phase E: Hybrid Decision Router (1–2 ngày)
+### Phase E: Hybrid Decision Router (1–2 days)
 
-| Task | Mô tả |
-|------|-------|
-| E1 | Chạy Deterministic rules trước; nếu clear (vd: ESCALATE high-risk) → dùng luôn |
-| E2 | Gray zone: gọi LLM với query, QuerySpec, evidence summary, quality_report |
+| Task | Description |
+|------|-------------|
+| E1 | Run Deterministic rules first; if clear (e.g. ESCALATE high-risk) → use directly |
+| E2 | Gray zone: call LLM with query, QuerySpec, evidence summary, quality_report |
 | E3 | Output: `{ decision, reason, confidence, clarifying_questions, partial_links }` |
-| E4 | Ràng buộc: LLM không được override ESCALATE → PASS |
+| E4 | Constraint: LLM cannot override ESCALATE → PASS |
 | E5 | Config: `decision_router_use_llm` |
 
-**Output:** Decision Router hybrid – rule cứng + LLM cho gray zone.
+**Output:** Hybrid Decision Router – hard rules + LLM for gray zone.
 
 ---
 
-### Phase F: Tích hợp & tối ưu (1–2 ngày)
+### Phase F: Integration & Optimization (1–2 days)
 
-| Task | Mô tả |
-|------|-------|
-| F1 | Refactor `answer_service` theo flow archi_v3 |
-| F2 | Config tổng hợp, bật/tắt từng bước |
+| Task | Description |
+|------|-------------|
+| F1 | Refactor `answer_service` per archi_v3 flow |
+| F2 | Consolidated config, enable/disable each step |
 | F3 | Metrics, logging, observability |
-| F4 | Fallback khi LLM fail |
+| F4 | Fallback when LLM fails |
 
 ---
 
-## 7. Thứ tự triển khai đề xuất
+## 7. Recommended Implementation Order
 
 ```
-1. Phase A (Language Detect + LLM Normalizer)  → Nền tảng
-2. Phase B (Evidence Evaluator)                → Cải thiện retrieval
-3. Phase C (Self-Critic + Regenerate)         → Cải thiện answer
-4. Phase D (Final Polish)                     → UX
-5. Phase E (Hybrid Decision Router)           → Quyết định gray zone
-6. Phase F (Tích hợp)                         → Hoàn thiện
+1. Phase A (Language Detect + LLM Normalizer)  → Foundation
+2. Phase B (Evidence Evaluator)                → Improve retrieval
+3. Phase C (Self-Critic + Regenerate)          → Improve answer
+4. Phase D (Final Polish)                      → UX
+5. Phase E (Hybrid Decision Router)            → Gray zone decisions
+6. Phase F (Integration)                       → Finalize
 ```
 
 ---
 
-## 8. Flow tổng hợp (archi_v3)
+## 8. Combined Flow (archi_v3)
 
 ```
 Input
   ↓
 detect_language (fast, non-LLM)
   ↓
-LLM Normalizer (language-aware, translate nội bộ nếu cần)
+LLM Normalizer (language-aware, translate internally if needed)
   → intent_cache_match? → return
   → is_ambiguous? → ask_user
   ↓
@@ -216,13 +216,13 @@ Output (English)
 
 ---
 
-## 9. Config đề xuất (archi_v3)
+## 9. Proposed Config (archi_v3)
 
 ```env
 # Language
 LANGUAGE_DETECT_ENABLED=true
 
-# Normalizer (gộp translate + QuerySpec)
+# Normalizer (merge translate + QuerySpec)
 NORMALIZER_USE_LLM=true
 NORMALIZER_LLM_MODEL=gpt-4o-mini
 
@@ -244,11 +244,11 @@ DECISION_ROUTER_LLM_MODEL=gpt-4o-mini
 
 ---
 
-## 10. Tóm tắt
+## 10. Summary
 
-| Câu hỏi | Trả lời |
-|---------|---------|
-| **Có nên upgrade sang archi_v3?** | Có – thiết kế rõ, phù hợp production |
-| **Ưu điểm chính** | Gọn (gộp translate), Self-Critic + regenerate có giới hạn, Final Polish, Hybrid Decision Router |
-| **Điều chỉnh kế hoạch** | Bỏ Language Gate riêng + Orchestrator + Translate-back; gộp translate vào Normalizer; thêm Evidence Evaluator, Self-Critic, Final Polish, Hybrid Decision Router |
-| **Thứ tự** | A → B → C → D → E → F |
+| Question | Answer |
+|----------|--------|
+| **Should we upgrade to archi_v3?** | Yes – clear design, production-ready |
+| **Main advantages** | Concise (merged translate), Self-Critic + limited regenerate, Final Polish, Hybrid Decision Router |
+| **Plan adjustments** | Remove separate Language Gate + Orchestrator + Translate-back; merge translate into Normalizer; add Evidence Evaluator, Self-Critic, Final Polish, Hybrid Decision Router |
+| **Order** | A → B → C → D → E → F |
