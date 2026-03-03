@@ -26,9 +26,11 @@ async def lifespan(app: FastAPI):
         from app.db.session import async_session_factory
         from app.services.archi_config import refresh_cache as refresh_archi_config
         from app.services.branding_config import refresh_cache
+        from app.services.doc_type_service import refresh_doc_type_cache
         from app.services.llm_config import refresh_cache as refresh_llm_config
         async with async_session_factory() as session:
             await refresh_cache(session)
+            await refresh_doc_type_cache(session)
             await refresh_llm_config(session)
             await refresh_archi_config(session)
     except Exception as e:

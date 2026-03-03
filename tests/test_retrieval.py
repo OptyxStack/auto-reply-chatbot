@@ -86,3 +86,51 @@ def test_query_rewrite_with_query_spec():
     qr = svc._query_rewrite("original query", query_spec=spec)
     assert qr.keyword_query == "custom keyword query"
     assert qr.semantic_query == "custom semantic query"
+
+
+def test_query_rewrite_uses_rewrite_candidates_on_retry():
+    """On retry without suggested_query, QuerySpec rewrite_candidates can refine the search query."""
+    from app.services.schemas import QuerySpec
+    from app.services.retry_planner import RetryStrategy
+
+    svc = RetrievalService()
+    spec = QuerySpec(
+        intent="transactional",
+        entities=[],
+        constraints={},
+        required_evidence=[],
+        risk_level="low",
+        keyword_queries=["pricing query"],
+        semantic_queries=["pricing query"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        rewrite_candidates=["pricing query", "dedicated server monthly pricing"],
+    )
+    qr = svc._query_rewrite(
+        "original query",
+        retry_strategy=RetryStrategy(boost_patterns=["USD"]),
+        query_spec=spec,
+    )
+    assert qr.semantic_query == "dedicated server monthly pricing"
+    assert "USD" in qr.keyword_query
+
+
+def test_resolve_retrieval_profile_prefers_query_spec():
+    """QuerySpec retrieval_profile should override fallback keyword heuristics."""
+    from app.services.schemas import QuerySpec
+
+    svc = RetrievalService()
+    spec = QuerySpec(
+        intent="policy",
+        entities=[],
+        constraints={},
+        required_evidence=[],
+        risk_level="low",
+        keyword_queries=[],
+        semantic_queries=[],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        retrieval_profile="policy_profile",
+    )
+    profile = svc._resolve_retrieval_profile("vps plans and price", spec)
+    assert profile == "policy_profile"

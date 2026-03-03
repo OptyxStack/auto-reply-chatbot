@@ -18,6 +18,8 @@ from app.api.schemas import (
     DocumentUpdateRequest,
     FetchFromUrlRequest,
     FetchFromUrlResponse,
+    ReCrawlAllResponse,
+    ReCrawlDocumentResponse,
 )
 from app.core.auth import verify_api_key
 from app.db.models import Document, Chunk
@@ -28,6 +30,7 @@ from app.services.source_sync import (
     sync_document_delete,
     sync_document_update,
 )
+from app.services.source_sync import doc_type_source_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -72,11 +75,22 @@ async def crawl_website(
             body.url,
             max_pages=body.max_pages,
             max_depth=body.max_depth,
+            exclude_prefixes=body.exclude_prefixes or [],
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Crawl failed: {str(e)}")
+
+    from app.services.doc_type_classifier import resolve_doc_type
+
+    for d in docs:
+        d["doc_type"] = await resolve_doc_type(
+            d["url"],
+            d.get("title", "Untitled"),
+            d.get("content", d.get("raw_text", "")),
+        )
+        d["source_file"] = doc_type_source_file(d["doc_type"])
 
     pages: list[CrawledPage] = [
         CrawledPage(url=d["url"], title=d["title"], doc_type=d["doc_type"])
@@ -94,6 +108,7 @@ async def crawl_website(
                     source_url=doc["source_url"],
                     title=doc["title"],
                     content=doc.get("content", doc.get("raw_text", "")),
+                    doc_type=doc.get("doc_type", "other"),
                 )
 
     return CrawlWebsiteResponse(
@@ -101,6 +116,87 @@ async def crawl_website(
         pages_crawled=len(docs),
         pages_ingested=ingested,
         pages=pages,
+    )
+
+
+@router.post("/re-crawl-all", response_model=ReCrawlAllResponse)
+async def re_crawl_all_documents(
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_api_key),
+):
+    """Re-crawl all documents with http(s) source_url. Fetches latest content and re-ingests."""
+    import asyncio
+    from app.services.doc_type_classifier import resolve_doc_type
+    from app.services.ingestion import IngestionService, prepare_document
+    from app.services.url_fetcher import fetch_content_from_url
+
+    result = await db.execute(
+        select(Document).where(
+            (Document.source_url.startswith("http://")) | (Document.source_url.startswith("https://"))
+        )
+    )
+    docs = result.scalars().all()
+    total = len(docs)
+
+    updated = 0
+    skipped = 0
+    error_count = 0
+    errors: list[str] = []
+    svc = IngestionService()
+
+    for doc in docs:
+        url = doc.source_url
+        try:
+            fetched = await asyncio.to_thread(fetch_content_from_url, url)
+            content = (fetched.get("content") or "").strip()
+            if len(content) < 50:
+                skipped += 1
+                continue
+            doc_type = await resolve_doc_type(
+                url,
+                fetched.get("title", doc.title),
+                content,
+            )
+            new_source_file = doc_type_source_file(doc_type)
+            doc_dict = {
+                "url": url,
+                "source_url": url,
+                "title": fetched.get("title", doc.title),
+                "content": content,
+                "raw_text": content,
+                "doc_type": doc_type,
+                "metadata": dict(doc.doc_metadata or {}),
+                "source_file": new_source_file,
+            }
+            cleaned, _, _ = prepare_document(doc_dict)
+            import hashlib
+            new_checksum = hashlib.sha256(cleaned.encode()).hexdigest()
+            if new_checksum == doc.checksum:
+                skipped += 1
+                continue
+            doc_id = await svc.ingest_document(doc_dict, db)
+            if doc_id:
+                updated += 1
+                if doc.source_file and doc.source_file != new_source_file and doc.source_file.endswith(".json"):
+                    sync_document_delete(source_url=url, source_file=doc.source_file)
+                sync_document_create(
+                    source_url=url,
+                    title=doc_dict["title"],
+                    content=content,
+                    doc_type=doc_type,
+                )
+        except Exception as e:
+            error_count += 1
+            if len(errors) < 10:
+                errors.append(f"{url[:60]}...: {str(e)[:80]}")
+
+    return ReCrawlAllResponse(
+        status="ok",
+        total=total,
+        updated=updated,
+        skipped=skipped,
+        error=error_count,
+        errors=errors,
     )
 
 
@@ -193,6 +289,89 @@ async def get_document(
     )
 
 
+@router.post("/{document_id}/re-crawl", response_model=ReCrawlDocumentResponse)
+async def re_crawl_document(
+    document_id: str,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_api_key),
+):
+    """Re-crawl a single document by ID. Fetches latest content from source_url and re-ingests.
+    Only works for documents with http(s) source_url."""
+    import asyncio
+    from app.services.doc_type_classifier import resolve_doc_type
+    from app.services.ingestion import IngestionService, prepare_document
+    from app.services.url_fetcher import fetch_content_from_url
+
+    result = await db.execute(select(Document).where(Document.id == document_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    url = doc.source_url
+    if not url.startswith(("http://", "https://")):
+        raise HTTPException(
+            status_code=400,
+            detail="Document source_url is not crawlable (must be http or https)",
+        )
+
+    try:
+        fetched = await asyncio.to_thread(fetch_content_from_url, url)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch URL: {str(e)}")
+
+    content = (fetched.get("content") or "").strip()
+    if len(content) < 50:
+        raise HTTPException(status_code=400, detail="Fetched content too short (min 50 chars)")
+
+    doc_type = await resolve_doc_type(
+        url,
+        fetched.get("title", doc.title),
+        content,
+    )
+    new_source_file = doc_type_source_file(doc_type)
+    doc_dict = {
+        "url": url,
+        "source_url": url,
+        "title": fetched.get("title", doc.title),
+        "content": content,
+        "raw_text": content,
+        "doc_type": doc_type,
+        "metadata": dict(doc.doc_metadata or {}),
+        "source_file": new_source_file,
+    }
+    cleaned, _, _ = prepare_document(doc_dict)
+    import hashlib
+    new_checksum = hashlib.sha256(cleaned.encode()).hexdigest()
+    was_updated = new_checksum != doc.checksum
+
+    svc = IngestionService()
+    doc_id = await svc.ingest_document(doc_dict, db)
+    if not doc_id:
+        raise HTTPException(status_code=500, detail="Ingestion failed")
+
+    if was_updated:
+        if doc.source_file and doc.source_file != new_source_file and doc.source_file.endswith(".json"):
+            sync_document_delete(source_url=url, source_file=doc.source_file)
+        sync_document_create(
+            source_url=url,
+            title=doc_dict["title"],
+            content=content,
+            doc_type=doc_type,
+        )
+
+    chunk_count = await db.execute(
+        select(func.count()).select_from(Chunk).where(Chunk.document_id == doc_id)
+    )
+    return ReCrawlDocumentResponse(
+        status="ok",
+        document_id=doc_id,
+        title=doc_dict["title"],
+        source_url=url,
+        chunks_count=chunk_count.scalar() or 0,
+        updated=was_updated,
+    )
+
+
 @router.post("/upload", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     file: UploadFile = File(...),
@@ -202,6 +381,8 @@ async def upload_document(
     _auth: str = Depends(verify_api_key),
 ):
     """Upload .txt, .md, or .pdf file and ingest into knowledge base."""
+    from app.services.archi_config import get_doc_type_classifier_enabled
+    from app.services.doc_type_classifier import resolve_doc_type
     from app.services.file_parser import extract_text_from_file
     from app.services.ingestion import IngestionService
 
@@ -223,13 +404,16 @@ async def upload_document(
 
     url = f"file://{uuid.uuid4().hex[:8]}-{filename}"
     doc_title = (title or filename).strip() or "Untitled"
+    if get_doc_type_classifier_enabled():
+        doc_type = await resolve_doc_type(url, doc_title, raw_text)
+
     doc_dict = {
         "url": url,
         "source_url": url,
         "title": doc_title,
         "raw_text": raw_text,
         "doc_type": doc_type,
-        "source_file": CUSTOM_DOCS_FILE,
+        "source_file": doc_type_source_file(doc_type),
     }
 
     svc = IngestionService()
@@ -241,7 +425,7 @@ async def upload_document(
     doc = result.scalar_one()
 
     if not doc.source_file:
-        doc.source_file = CUSTOM_DOCS_FILE
+        doc.source_file = doc_type_source_file(doc.doc_type)
         await db.commit()
         await db.refresh(doc)
 
@@ -249,6 +433,7 @@ async def upload_document(
         source_url=doc.source_url,
         title=doc.title,
         content=doc.cleaned_content or doc.raw_content or "",
+        doc_type=doc.doc_type,
     )
 
     chunk_count = await db.execute(
@@ -275,7 +460,14 @@ async def create_document(
     _auth: str = Depends(verify_api_key),
 ):
     """Create new document via ingestion pipeline."""
+    from app.services.archi_config import get_doc_type_classifier_enabled
+    from app.services.doc_type_classifier import resolve_doc_type
     from app.services.ingestion import IngestionService
+
+    content = (body.content or body.raw_text or "").strip()
+    doc_type = body.doc_type
+    if get_doc_type_classifier_enabled() and content:
+        doc_type = await resolve_doc_type(body.url, body.title or "Untitled", content)
 
     doc_dict = {
         "url": body.url,
@@ -283,13 +475,13 @@ async def create_document(
         "raw_text": body.raw_text,
         "raw_html": body.raw_html,
         "content": body.content,
-        "doc_type": body.doc_type,
+        "doc_type": doc_type,
         "effective_date": body.effective_date,
         "last_updated": body.last_updated,
         "product": body.product,
         "region": body.region,
         "metadata": body.metadata,
-        "source_file": body.source_file,
+        "source_file": body.source_file or doc_type_source_file(doc_type),
     }
     svc = IngestionService()
     document_id = await svc.ingest_document(doc_dict, db)
@@ -299,17 +491,18 @@ async def create_document(
     result = await db.execute(select(Document).where(Document.id == document_id))
     doc = result.scalar_one()
 
-    # Assign source_file for docs created via admin panel
+    # Assign source_file for docs created via admin panel (by doc_type)
     if not doc.source_file:
-        doc.source_file = CUSTOM_DOCS_FILE
+        doc.source_file = doc_type_source_file(doc.doc_type)
         await db.commit()
         await db.refresh(doc)
 
-    # Sync to source JSON
+    # Sync to source JSON (by doc_type)
     sync_document_create(
         source_url=doc.source_url,
         title=doc.title,
         content=doc.cleaned_content or doc.raw_content or "",
+        doc_type=doc.doc_type,
     )
 
     chunk_count = await db.execute(
@@ -342,6 +535,7 @@ async def update_document(
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    old_source_file = doc.source_file
     if body.title is not None:
         doc.title = body.title
     if body.doc_type is not None:
@@ -354,16 +548,30 @@ async def update_document(
     if body.metadata is not None:
         doc.doc_metadata = body.metadata
 
+    new_source_file = doc_type_source_file(doc.doc_type)
+    if body.doc_type is not None and old_source_file != new_source_file:
+        doc.source_file = new_source_file
+
     await db.commit()
     await db.refresh(doc)
 
-    # Sync changed fields back to source JSON
-    sync_document_update(
-        source_url=doc.source_url,
-        source_file=doc.source_file,
-        title=body.title,
-        cleaned_content=doc.cleaned_content,
-    )
+    # Sync to source JSON: move between files if doc_type changed, else update in place
+    if body.doc_type is not None and old_source_file and old_source_file != new_source_file and old_source_file.endswith(".json"):
+        sync_document_delete(source_url=doc.source_url, source_file=old_source_file)
+    if body.doc_type is not None:
+        sync_document_create(
+            source_url=doc.source_url,
+            title=doc.title,
+            content=doc.cleaned_content or doc.raw_content or "",
+            doc_type=doc.doc_type,
+        )
+    elif body.title is not None or body.metadata is not None:
+        sync_document_update(
+            source_url=doc.source_url,
+            source_file=doc.source_file,
+            title=body.title,
+            cleaned_content=doc.cleaned_content,
+        )
 
     chunk_count = await db.execute(
         select(func.count()).select_from(Chunk).where(Chunk.document_id == doc.id)

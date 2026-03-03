@@ -18,3 +18,6 @@ htmlcov/
 *.egg-info/
 dist/
 build/
+
+# Debug/test output
+app/services/hn.html

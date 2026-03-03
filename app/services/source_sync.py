@@ -4,15 +4,16 @@ When documents are created / updated / deleted via the admin API the
 corresponding entry in the source JSON is kept in sync so that a future
 ``ingest-from-source`` does not overwrite manual edits.
 
+Documents are organized by doc_type: each type goes to ``{doc_type}.json``
+(e.g. policy.json, faq.json, howto.json). This enables retrieval to target
+specific doc type files semantically.
+
 Supported formats
 -----------------
 - **pages**   : ``{"pages": [{"url", "title", "text"}]}``
 - **articles**: ``{"articles": [{"url", "title", "snippet"}]}``
 - **plans**   : ``{"plans": [{"plan_name", …}]}``  (title-only sync)
-- ``greencloud_chatbot_master.json`` is skipped (too deeply nested).
-
-Documents created through the admin panel that have no ``source_file``
-are persisted in ``custom_docs.json`` (pages format).
+- ``{doc_type}.json``: pages format for custom docs by type
 """
 
 import json
@@ -24,6 +25,13 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 CUSTOM_DOCS_FILE = "custom_docs.json"
+
+
+def doc_type_source_file(doc_type: str) -> str:
+    """Return source file name for doc_type (e.g. policy.json, faq.json)."""
+    key = (doc_type or "other").strip().lower().replace(" ", "_")
+    return f"{key}.json" if key else "other.json"
+
 
 _FILE_FORMATS: dict[str, dict[str, Any]] = {
     "sample_docs.json":                    {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
@@ -85,6 +93,16 @@ def _find_entry_index(entries: list[dict], source_url: str, url_field: str | Non
 # Public API
 # ---------------------------------------------------------------------------
 
+def _get_format(source_file: str) -> dict[str, Any] | None:
+    """Return format config for source file. Doc-type files use pages format."""
+    fmt = _FILE_FORMATS.get(source_file)
+    if fmt:
+        return fmt
+    if source_file.endswith(".json"):
+        return {"list_key": "pages", "url_field": "url", "title_field": "title", "text_field": "text"}
+    return None
+
+
 def sync_document_update(
     source_url: str,
     source_file: str | None,
@@ -94,7 +112,7 @@ def sync_document_update(
 ) -> bool:
     """Write changed fields back to the source JSON entry.  Returns True on success."""
     source_file = source_file or CUSTOM_DOCS_FILE
-    fmt = _FILE_FORMATS.get(source_file)
+    fmt = _get_format(source_file)
     if not fmt:
         logger.debug("source_sync_skip_unknown_format", source_file=source_file)
         return False
@@ -134,17 +152,19 @@ def sync_document_create(
     source_url: str,
     title: str,
     content: str,
+    doc_type: str = "other",
 ) -> bool:
-    """Append a new entry to ``custom_docs.json``.  Returns True on success."""
+    """Append a new entry to ``{doc_type}.json``. Returns True on success."""
+    source_file = doc_type_source_file(doc_type)
     source_dir = _resolve_source_dir()
     source_dir.mkdir(parents=True, exist_ok=True)
-    path = source_dir / CUSTOM_DOCS_FILE
+    path = source_dir / source_file
 
     try:
         if path.exists():
             data = _read_json(path)
         else:
-            data = {"source": "admin_panel", "pages": []}
+            data = {"source": "admin_panel", "doc_type": doc_type, "pages": []}
 
         pages: list[dict] = data.setdefault("pages", [])
 
@@ -154,12 +174,12 @@ def sync_document_create(
                 p["title"] = title
                 p["text"] = content
                 _write_json(path, data)
-                logger.info("source_sync_upserted", source_file=CUSTOM_DOCS_FILE, url=source_url[:80])
+                logger.info("source_sync_upserted", source_file=source_file, url=source_url[:80])
                 return True
 
         pages.append({"url": source_url, "title": title, "text": content})
         _write_json(path, data)
-        logger.info("source_sync_created", source_file=CUSTOM_DOCS_FILE, url=source_url[:80])
+        logger.info("source_sync_created", source_file=source_file, url=source_url[:80])
         return True
     except Exception as e:
         logger.warning("source_sync_create_failed", error=str(e))
@@ -169,7 +189,7 @@ def sync_document_create(
 def sync_document_delete(source_url: str, source_file: str | None) -> bool:
     """Remove the matching entry from the source JSON.  Returns True on success."""
     source_file = source_file or CUSTOM_DOCS_FILE
-    fmt = _FILE_FORMATS.get(source_file)
+    fmt = _get_format(source_file)
     if not fmt:
         return False
 

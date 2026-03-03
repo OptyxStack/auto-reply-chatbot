@@ -63,6 +63,48 @@ def test_passes_quality_gate_no_required():
     assert passes_quality_gate(report, None)
 
 
+def test_hard_requirement_uses_sufficiency_not_average_threshold():
+    """A single strong chunk can satisfy a hard requirement even when average ratio is low."""
+    chunks = [
+        EvidenceChunk(
+            "c1",
+            "Plan: $10/month USD",
+            "https://example.com/pricing",
+            "pricing",
+            0.9,
+            "Plan: $10/month USD",
+        ),
+    ]
+    chunks.extend(
+        EvidenceChunk(
+            f"noise-{idx}",
+            "General info without numbers",
+            "https://example.com/info",
+            "faq",
+            0.2,
+            "General info without numbers",
+        )
+        for idx in range(9)
+    )
+
+    report = evaluate_quality(
+        chunks,
+        ["numbers_units"],
+        hard_requirements=["numbers_units"],
+    )
+
+    assert report.feature_scores["numbers_units"] < 0.3
+    assert report.sufficiency_scores is not None
+    assert report.sufficiency_scores["numbers_units"] == 1.0
+    assert report.hard_requirement_coverage is not None
+    assert report.hard_requirement_coverage["numbers_units"] is True
+    assert passes_quality_gate(
+        report,
+        ["numbers_units"],
+        hard_requirements=["numbers_units"],
+    )
+
+
 def test_plan_retry_attempt_1():
     assert plan_retry(["missing_numbers"], 1) is None
 

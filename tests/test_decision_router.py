@@ -26,6 +26,7 @@ def test_route_ambiguous():
     dr = route(_ambiguous_spec(), None, [], [], True)
     assert dr.decision == "ASK_USER"
     assert dr.reason == "ambiguous_query"
+    assert dr.lane == "ASK_USER"
     assert dr.answer
     assert dr.clarifying_questions
 
@@ -46,6 +47,8 @@ def test_route_pass():
     dr = route(spec, report, [], [], True)
     assert dr.decision == "PASS"
     assert dr.reason == "sufficient"
+    assert dr.lane == "PASS_STRONG"
+    assert dr.answer_policy == "direct"
 
 
 def test_route_missing_evidence_quality():
@@ -67,8 +70,43 @@ def test_route_missing_evidence_quality():
     dr = route(spec, report, evidence, ["numbers_units"], False)
     assert dr.decision == "ASK_USER"
     assert dr.reason == "missing_evidence_quality"
+    assert dr.lane == "ASK_USER"
     assert dr.partial_links
     assert "https://example.com/page" in dr.partial_links
+
+
+def test_route_pass_weak_when_hard_requirements_are_covered():
+    spec = QuerySpec(
+        intent="transactional",
+        entities=[],
+        constraints={},
+        required_evidence=["numbers_units", "has_any_url"],
+        risk_level="low",
+        keyword_queries=["x"],
+        semantic_queries=["x"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        hard_requirements=["numbers_units"],
+    )
+    report = QualityReport(
+        0.35,
+        {"numbers_units": 0.1, "has_any_url": 0.0},
+        ["missing_links"],
+        None,
+        None,
+        sufficiency_scores={"numbers_units": 1.0, "has_any_url": 0.0},
+        hard_requirement_coverage={"numbers_units": True},
+    )
+    evidence = [
+        EvidenceChunk("c1", "Price: $10/month", "https://example.com/pricing", "pricing", 0.8, "Price: $10/month"),
+    ]
+
+    dr = route(spec, report, evidence, ["numbers_units", "has_any_url"], False)
+
+    assert dr.decision == "PASS"
+    assert dr.reason == "partial_sufficient"
+    assert dr.lane == "PASS_WEAK"
+    assert dr.answer_policy == "bounded"
 
 
 def test_route_high_risk_insufficient():
@@ -87,3 +125,4 @@ def test_route_high_risk_insufficient():
     dr = route(spec, report, [], ["policy_language"], False)
     assert dr.decision == "ESCALATE"
     assert dr.reason == "high_risk_insufficient"
+    assert dr.lane == "ESCALATE"

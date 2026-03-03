@@ -3,6 +3,7 @@
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.services.llm_gateway import get_llm_gateway
+from app.services.model_router import get_model_for_task
 
 logger = get_logger(__name__)
 
@@ -30,7 +31,7 @@ async def polish(answer: str) -> str | None:
         except Exception:
             pass
         llm = get_llm_gateway()
-        model = getattr(get_settings(), "llm_model", "gpt-4o-mini")
+        model = get_model_for_task("final_polish")
         resp = await llm.chat(
             messages=[
                 {"role": "system", "content": FINAL_POLISH_PROMPT},

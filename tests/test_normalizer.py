@@ -2,19 +2,33 @@
 
 import pytest
 
+from app.core.config import get_settings
 from app.services.normalizer import normalize
-from app.services.schemas import QuerySpec
+
+
+@pytest.fixture(autouse=True)
+def _reset_normalizer_settings(monkeypatch):
+    monkeypatch.setenv("NORMALIZER_USE_LLM", "false")
+    monkeypatch.delenv("NORMALIZER_DOMAIN_TERMS", raising=False)
+    monkeypatch.setenv("NORMALIZER_QUERY_EXPANSION", "false")
+    monkeypatch.setenv("NORMALIZER_SLOTS_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
 async def test_normalize_transactional():
     spec = await normalize("what is the price of VPS?")
     assert spec.intent == "transactional"
-    assert "numbers_units" in spec.required_evidence
-    assert "transaction_link" in spec.required_evidence
+    assert spec.required_evidence == []
+    assert spec.hard_requirements == ["numbers_units"]
+    assert spec.soft_requirements == ["has_any_url"]
     assert not spec.is_ambiguous
     assert spec.keyword_queries
     assert spec.semantic_queries
+    assert spec.keyword_queries == spec.semantic_queries
+    assert spec.extraction_mode == "rule_primary"
 
 
 @pytest.mark.asyncio
@@ -22,6 +36,7 @@ async def test_normalize_policy():
     spec = await normalize("refund policy")
     assert spec.intent == "policy"
     assert "policy_language" in spec.required_evidence
+    assert "policy_language" in (spec.hard_requirements or [])
     assert spec.risk_level in ("low", "medium", "high")
 
 
@@ -61,11 +76,33 @@ async def test_normalize_not_ambiguous_without_context():
 
 
 @pytest.mark.asyncio
-async def test_normalize_entities():
+async def test_normalize_entities_default_generic_mode():
     spec = await normalize("VPS pricing for Windows and Linux")
+    assert spec.entities == []
+    assert spec.resolved_slots == {}
+    assert spec.config_overrides_applied == []
+
+
+@pytest.mark.asyncio
+async def test_normalize_compatibility_mode_uses_domain_overrides(monkeypatch):
+    monkeypatch.setenv("NORMALIZER_DOMAIN_TERMS", "vps,windows,linux")
+    monkeypatch.setenv("NORMALIZER_SLOTS_ENABLED", "true")
+    monkeypatch.setenv("NORMALIZER_QUERY_EXPANSION", "true")
+    get_settings.cache_clear()
+
+    spec = await normalize("VPS pricing for Windows and Linux")
+
     assert "vps" in spec.entities
     assert "windows" in spec.entities
     assert "linux" in spec.entities
+    assert spec.resolved_slots is not None
+    assert spec.resolved_slots.get("product_type") == "vps"
+    assert spec.resolved_slots.get("os") == "windows"
+    assert "normalizer_domain_terms" in (spec.config_overrides_applied or [])
+    assert "normalizer_query_expansion" in (spec.config_overrides_applied or [])
+    assert "normalizer_slots_enabled" in (spec.config_overrides_applied or [])
+    assert spec.keyword_queries[0] != spec.semantic_queries[0]
+    assert "pricing" in spec.keyword_queries[0].lower()
 
 
 @pytest.mark.asyncio

@@ -135,8 +135,9 @@ api_latency_seconds = Histogram(
     buckets=[0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5],
 )
 
-# Token pricing (approximate USD per 1K tokens)
+# Token pricing (approximate USD per 1M tokens: input, output)
 TOKEN_PRICES = {
+    "gpt-5": (2.5, 10.0),
     "gpt-4o": (5.0, 15.0),
     "gpt-4o-mini": (0.15, 0.6),
     "gpt-4": (30.0, 60.0),
@@ -150,3 +151,27 @@ def estimate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
         if model.startswith(prefix):
             return (input_tokens * in_p / 1_000_000) + (output_tokens * out_p / 1_000_000)
     return (input_tokens * 0.5 / 1_000_000) + (output_tokens * 1.5 / 1_000_000)
+
+
+def compute_message_cost(usage_list: list[dict]) -> tuple[float, dict[str, int], list[dict]]:
+    """Compute total cost and aggregate tokens from usage list.
+
+    usage_list: [{"model": str, "input_tokens": int, "output_tokens": int}, ...]
+    Returns: (cost_usd, {"input": total_in, "output": total_out}, breakdown)
+    """
+    if not usage_list:
+        return 0.0, {"input": 0, "output": 0}, []
+    total_cost = 0.0
+    total_in = 0
+    total_out = 0
+    breakdown: list[dict] = []
+    for u in usage_list:
+        model = u.get("model", "unknown")
+        inp = int(u.get("input_tokens", 0))
+        out = int(u.get("output_tokens", 0))
+        cost = estimate_cost(model, inp, out)
+        total_cost += cost
+        total_in += inp
+        total_out += out
+        breakdown.append({"model": model, "input": inp, "output": out, "cost_usd": round(cost, 6)})
+    return total_cost, {"input": total_in, "output": total_out}, breakdown

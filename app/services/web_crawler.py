@@ -58,21 +58,37 @@ def _extract_links(html: str, base_url: str) -> set[str]:
     return links
 
 
+def _url_matches_exclude(url: str, exclude_prefixes: list[str]) -> bool:
+    """Return True if url starts with any exclude prefix."""
+    if not exclude_prefixes:
+        return False
+    url_lower = url.lower()
+    for prefix in exclude_prefixes:
+        p = (prefix or "").strip().lower()
+        if p and url_lower.startswith(p):
+            return True
+    return False
+
+
 def crawl_website(
     seed_url: str,
     max_pages: int = DEFAULT_MAX_PAGES,
     max_depth: int = DEFAULT_MAX_DEPTH,
     timeout: float = DEFAULT_TIMEOUT,
+    exclude_prefixes: list[str] | None = None,
 ) -> list[dict]:
     """
     Crawl website starting from seed_url. Returns list of doc dicts for ingestion.
     Each doc: {url, title, content, raw_text, doc_type, ...}
+    exclude_prefixes: URLs starting with any of these prefixes will not be crawled.
     """
     if not seed_url or not seed_url.strip():
         raise ValueError("Seed URL is required")
     seed_url = seed_url.strip()
     if not seed_url.startswith(("http://", "https://")):
         seed_url = "https://" + seed_url
+
+    exclude = [p.strip() for p in (exclude_prefixes or []) if p and p.strip()]
 
     base_domain = urlparse(seed_url).netloc
     seen: set[str] = set()
@@ -84,6 +100,10 @@ def crawl_website(
         if url in seen:
             continue
         seen.add(url)
+
+        if _url_matches_exclude(url, exclude):
+            logger.debug("web_crawler_skip_excluded", url=url[:80])
+            continue
 
         if depth > max_depth:
             continue
@@ -117,7 +137,7 @@ def crawl_website(
             raw_html = result.get("raw_html", "")
             if raw_html:
                 for link in _extract_links(raw_html, url):
-                    if link not in seen:
+                    if link not in seen and not _url_matches_exclude(link, exclude):
                         queue.append((link, depth + 1))
 
     logger.info("web_crawler_done", seed=seed_url, pages=len(docs), seen=len(seen))

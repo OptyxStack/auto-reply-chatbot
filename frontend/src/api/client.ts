@@ -70,6 +70,19 @@ export const conversations = {
       method: 'POST',
       body: JSON.stringify({ content }),
     }),
+  /** SSE streaming. Returns EventSource-like stream. */
+  sendMessageStream: (id: string, content: string) => {
+    const url = `${API_BASE}/conversations/${id}/messages:stream`
+    return fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-API-Key': API_KEY,
+        'X-Admin-API-Key': API_KEY,
+      },
+      body: JSON.stringify({ content }),
+    })
+  },
 }
 
 export const dashboard = {
@@ -159,20 +172,82 @@ export interface LLMConfigUpdate {
   llm_base_url?: string
 }
 
+export interface Intent {
+  id: string
+  key: string
+  patterns: string
+  answer: string
+  enabled: boolean
+  sort_order: number
+}
+
+export interface IntentCreate {
+  key: string
+  patterns: string
+  answer: string
+  enabled?: boolean
+  sort_order?: number
+}
+
+export interface IntentUpdate {
+  patterns?: string
+  answer?: string
+  enabled?: boolean
+  sort_order?: number
+}
+
+export interface DocType {
+  id: string
+  key: string
+  label: string
+  description: string | null
+  enabled: boolean
+  sort_order: number
+}
+
+export interface DocTypeCreate {
+  key: string
+  label: string
+  description?: string | null
+  enabled?: boolean
+  sort_order?: number
+}
+
+export interface DocTypeUpdate {
+  label?: string
+  description?: string | null
+  enabled?: boolean
+  sort_order?: number
+}
+
 export interface ArchiConfig {
   language_detect_enabled: boolean
   decision_router_use_llm: boolean
   evidence_evaluator_enabled: boolean
+  evidence_quality_use_llm?: boolean
   self_critic_enabled: boolean
   final_polish_enabled: boolean
+  doc_type_classifier_enabled: boolean
+  retrieval_doc_type_use_llm: boolean
+  llm_model_economy: string
+  llm_task_aware_routing_enabled: boolean
 }
 
 export interface ArchiConfigUpdate {
   language_detect_enabled?: boolean
   decision_router_use_llm?: boolean
   evidence_evaluator_enabled?: boolean
+  evidence_quality_use_llm?: boolean
   self_critic_enabled?: boolean
   final_polish_enabled?: boolean
+  doc_type_classifier_enabled?: boolean
+  retrieval_doc_type_use_llm?: boolean
+  llm_model_economy?: string
+  llm_task_aware_routing_enabled?: boolean
+}
+
+export interface SystemPromptConfig {
+  value: string
 }
 
 export const admin = {
@@ -182,6 +257,10 @@ export const admin = {
   getArchiConfig: () => http.get<ArchiConfig>(`/admin/config/archi`).then((res) => res.data),
   updateArchiConfig: (data: ArchiConfigUpdate) =>
     http.put<ArchiConfig>(`/admin/config/archi`, data).then((res) => res.data),
+  getSystemPrompt: () =>
+    http.get<SystemPromptConfig>(`/admin/config/system-prompt`).then((res) => res.data),
+  updateSystemPrompt: (data: { value: string }) =>
+    http.put<SystemPromptConfig>(`/admin/config/system-prompt`, data).then((res) => res.data),
   refreshConfigCache: () =>
     http.post<{ status: string; message: string }>(`/admin/config/refresh-cache`).then((res) => res.data),
   ingestFromSource: (sourceDir = 'source') =>
@@ -200,9 +279,23 @@ export const admin = {
     http.patch(`/admin/tickets/${ticketId}/approval`, { approval_status: approvalStatus }).then((res) => res.data),
   ingestTicketsToFile: () =>
     http.post<{ status: string; path: string; count: number }>(`/admin/ingest-tickets-to-file`).then((res) => res.data),
+  listIntents: () =>
+    http.get<Intent[]>(`/admin/intents`).then((res) => res.data),
+  createIntent: (data: IntentCreate) =>
+    http.post<Intent>(`/admin/intents`, data).then((res) => res.data),
+  updateIntent: (id: string, data: IntentUpdate) =>
+    http.put<Intent>(`/admin/intents/${id}`, data).then((res) => res.data),
+  deleteIntent: (id: string) =>
+    http.delete(`/admin/intents/${id}`).then((res) => res.data),
+  listDocTypes: () =>
+    http.get<DocType[]>(`/admin/doc-types`).then((res) => res.data),
+  createDocType: (data: DocTypeCreate) =>
+    http.post<DocType>(`/admin/doc-types`, data).then((res) => res.data),
+  updateDocType: (id: string, data: DocTypeUpdate) =>
+    http.put<DocType>(`/admin/doc-types/${id}`, data).then((res) => res.data),
+  deleteDocType: (id: string) =>
+    http.delete(`/admin/doc-types/${id}`).then((res) => res.data),
 }
-
-export const DOC_TYPES = ['policy', 'tos', 'faq', 'howto', 'pricing', 'other'] as const
 
 export interface Document {
   id: string
@@ -230,6 +323,24 @@ export interface CrawlWebsiteResponse {
   pages_crawled: number
   pages_ingested: number
   pages: Array<{ url: string; title: string; doc_type: string }>
+}
+
+export interface ReCrawlAllResponse {
+  status: string
+  total: number
+  updated: number
+  skipped: number
+  error: number
+  errors: string[]
+}
+
+export interface ReCrawlDocumentResponse {
+  status: string
+  document_id: string
+  title: string
+  source_url: string
+  chunks_count: number
+  updated: boolean
 }
 
 export const documents = {
@@ -281,11 +392,18 @@ export const documents = {
     max_pages?: number
     max_depth?: number
     ingest?: boolean
+    exclude_prefixes?: string[]
   }) =>
     api<CrawlWebsiteResponse>(`/documents/crawl-website`, {
       method: 'POST',
       body: JSON.stringify(params),
     }),
+  /** Re-crawl all documents with http(s) source_url. Fetches latest content and re-ingests. */
+  reCrawlAll: () =>
+    api<ReCrawlAllResponse>(`/documents/re-crawl-all`, { method: 'POST' }),
+  /** Re-crawl a single document by ID. Fetches latest content from source_url. */
+  reCrawl: (documentId: string) =>
+    api<ReCrawlDocumentResponse>(`/documents/${documentId}/re-crawl`, { method: 'POST' }),
 }
 
 export interface Conversation {
@@ -308,6 +426,10 @@ export interface FlowDebug {
   evidence_summary?: { chunk_id: string; source_url: string; doc_type: string; score?: number; snippet: string }[]
   prompt_preview?: { system_length: number; user_length: number; system_preview: string; user_preview: string }
   llm_tokens?: { input: number; output: number }
+  /** Estimated cost in USD for this message (all LLM calls) */
+  cost_usd?: number
+  /** Per-call breakdown: model, input, output, cost_usd */
+  llm_usage_breakdown?: { model: string; input: number; output: number; cost_usd: number }[]
   reviewer_reasons?: string[]
   max_attempts_reached?: boolean
   intent_cache?: string
@@ -319,6 +441,24 @@ export interface FlowDebug {
   self_critic_regenerated?: boolean
   /** archi_v3: final polish was applied */
   final_polish_applied?: boolean
+  /** Explainability: pipeline stage timeline */
+  stage_reasons?: string[]
+  /** Explainability: why flow ended (done, ask_user, escalate) */
+  termination_reason?: string
+  /** Explainability: decision router with human-readable reason */
+  decision_router?: {
+    decision?: string
+    reason?: string
+    reason_human?: string
+    lane?: string
+    answer_policy?: string
+  }
+  /** Explainability: query_spec extraction mode (llm_primary, rule_fallback) */
+  query_spec?: { extraction_mode?: string; [k: string]: unknown }
+  /** Explainability: quality report hard requirement coverage */
+  quality_report?: { hard_requirement_coverage?: Record<string, boolean>; [k: string]: unknown }
+  /** Explainability: claim → citation chunk_ids */
+  claim_to_citation_map?: Record<string, string[]>
 }
 
 export interface Message {

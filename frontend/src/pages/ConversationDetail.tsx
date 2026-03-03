@@ -28,6 +28,8 @@ export default function ConversationDetail() {
   const [error, setError] = useState<string | null>(null)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [streamingContent, setStreamingContent] = useState('')
+  const [useStreaming, setUseStreaming] = useState(true)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const load = async () => {
@@ -55,16 +57,49 @@ export default function ConversationDetail() {
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!id || !input.trim() || sending) return
+    const content = input.trim()
+    setInput('')
     setSending(true)
     setError(null)
+    setStreamingContent('')
+
     try {
-      await conversations.sendMessage(id, input.trim())
-      setInput('')
-      await load()
+      if (useStreaming) {
+        const res = await conversations.sendMessageStream(id, content)
+        if (!res.ok) throw new Error(res.statusText)
+        const reader = res.body?.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+            const events = buffer.split('\n\n')
+            buffer = events.pop() || ''
+            for (const ev of events) {
+              const m = ev.match(/^data:\s*(.+)$/m)
+              if (m) {
+                try {
+                  const data = JSON.parse(m[1])
+                  if (data.type === 'content') setStreamingContent((prev) => prev + (data.data || ''))
+                  else if (data.type === 'done') break
+                } catch {}
+              }
+            }
+          }
+        }
+        await load()
+      } else {
+        await conversations.sendMessage(id, content)
+        await load()
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to send message')
+      setInput(content)
     } finally {
       setSending(false)
+      setStreamingContent('')
     }
   }
 
@@ -132,7 +167,21 @@ export default function ConversationDetail() {
         {conv.messages.map((m) => (
           <MessageBubble key={m.id} message={m} />
         ))}
-        {sending && (
+        {streamingContent && (
+          <div className="flex items-start gap-3 animate-fade-in">
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+              style={{ background: 'linear-gradient(135deg, rgba(124,58,237,0.2), rgba(59,130,246,0.15))' }}
+            >
+              <Bot size={16} className="text-violet-400" />
+            </div>
+            <div className="glass rounded-2xl rounded-tl-lg px-4 py-3.5 max-w-[85%]">
+              <div className="text-zinc-200 whitespace-pre-wrap text-sm leading-relaxed">{streamingContent}</div>
+              <span className="inline-block w-2 h-4 ml-0.5 bg-violet-400 animate-pulse" />
+            </div>
+          </div>
+        )}
+        {sending && !streamingContent && (
           <div className="flex items-start gap-3 animate-fade-in">
             <div
               className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
@@ -156,10 +205,11 @@ export default function ConversationDetail() {
       </div>
 
       <form
-        className="flex items-end gap-3 pt-4 shrink-0"
+        className="flex flex-col gap-2 pt-4 shrink-0"
         style={{ borderTop: '1px solid rgba(255,255,255,0.04)' }}
         onSubmit={handleSend}
       >
+        <div className="flex items-end gap-3">
         <div className="flex-1 relative">
           <input
             type="text"
@@ -173,11 +223,21 @@ export default function ConversationDetail() {
         </div>
         <button
           type="submit"
-          className="btn-primary p-3.5 rounded-2xl disabled:opacity-30 disabled:cursor-not-allowed"
+          className="btn-primary p-3.5 rounded-2xl disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
           disabled={sending || !input.trim()}
         >
           {sending ? <Loader2 size={18} className="animate-spin-slow" /> : <Send size={18} />}
         </button>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-zinc-500 cursor-pointer w-fit">
+          <input
+            type="checkbox"
+            checked={useStreaming}
+            onChange={(e) => setUseStreaming(e.target.checked)}
+            className="rounded border-white/10"
+          />
+          Stream response
+        </label>
       </form>
     </div>
   )
@@ -209,7 +269,8 @@ function MessageBubble({ message }: { message: Message }) {
   const debug = message.debug
   const hasDebug = debug && (
     debug.decision != null || debug.confidence != null || debug.trace_id ||
-    debug.source_lang || debug.evidence_eval || debug.self_critic_regenerated || debug.final_polish_applied
+    debug.source_lang || debug.evidence_eval || debug.self_critic_regenerated || debug.final_polish_applied ||
+    (debug.stage_reasons && debug.stage_reasons.length > 0) || debug.termination_reason
   )
 
   return (
@@ -315,10 +376,33 @@ function ConfidenceBadge({ value }: { value: number }) {
 function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
   return (
     <div className="mt-2 glass rounded-2xl overflow-hidden text-xs animate-slide-up">
-      {(debug.decision != null || debug.confidence != null || debug.followup_questions?.length) && (
+      {(debug.stage_reasons && debug.stage_reasons.length > 0) || debug.termination_reason ? (
+        <DebugSection icon={<Zap size={13} />} title="Decision Path">
+          <div className="space-y-1.5 text-zinc-400">
+            {debug.termination_reason && (
+              <div>Ended: <span className="text-zinc-300 capitalize">{debug.termination_reason.replace(/_/g, ' ')}</span></div>
+            )}
+            {debug.stage_reasons && debug.stage_reasons.length > 0 && (
+              <div>
+                <div className="mb-1 text-zinc-500">Pipeline timeline:</div>
+                <ol className="list-decimal pl-4 space-y-0.5">
+                  {debug.stage_reasons.map((s, i) => (
+                    <li key={i} className="text-zinc-300 font-mono text-[11px]">{s}</li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </div>
+        </DebugSection>
+      ) : null}
+
+      {(debug.decision != null || debug.confidence != null || debug.followup_questions?.length || debug.decision_router?.reason_human) && (
         <DebugSection icon={<Zap size={13} />} title="Decision & Confidence">
           <div className="space-y-1.5 text-zinc-400">
             {debug.decision != null && <div>Decision: <span className="text-zinc-300">{debug.decision}</span></div>}
+            {debug.decision_router?.reason_human && (
+              <div>Reason: <span className="text-zinc-300">{debug.decision_router.reason_human}</span></div>
+            )}
             {debug.confidence != null && <div>Confidence: <span className="text-zinc-300">{(debug.confidence * 100).toFixed(1)}%</span></div>}
             {debug.followup_questions && debug.followup_questions.length > 0 && (
               <div>
@@ -338,6 +422,9 @@ function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
           {debug.model_used && <div>Model: <span className="text-zinc-300">{debug.model_used}</span></div>}
           {debug.attempt != null && <div>Attempt: <span className="text-zinc-300">{debug.attempt}</span></div>}
           {debug.intent_cache && <div>Intent cache: <span className="text-zinc-300">{debug.intent_cache}</span></div>}
+          {debug.query_spec?.extraction_mode && (
+            <div>Query extraction: <span className="text-zinc-300">{debug.query_spec.extraction_mode}</span></div>
+          )}
         </div>
       </DebugSection>
 
@@ -352,11 +439,28 @@ function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
 
       {debug.retrieval_stats && (
         <DebugSection icon={<Database size={13} />} title="Retrieval">
-          <div className="flex flex-wrap gap-2">
-            <StatPill label="BM25" value={debug.retrieval_stats.bm25_count} />
-            <StatPill label="Vector" value={debug.retrieval_stats.vector_count} />
-            <StatPill label="Merged" value={debug.retrieval_stats.merged_count} />
-            <StatPill label="Reranked" value={debug.retrieval_stats.reranked_count} />
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              <StatPill label="BM25" value={debug.retrieval_stats.bm25_count} />
+              <StatPill label="Vector" value={debug.retrieval_stats.vector_count} />
+              <StatPill label="Merged" value={debug.retrieval_stats.merged_count} />
+              <StatPill label="Reranked" value={debug.retrieval_stats.reranked_count} />
+            </div>
+            {debug.quality_report?.hard_requirement_coverage && Object.keys(debug.quality_report.hard_requirement_coverage).length > 0 && (
+              <div>
+                <div className="mb-1 text-zinc-500">Hard requirement coverage:</div>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(debug.quality_report.hard_requirement_coverage).map(([req, covered]) => (
+                    <span
+                      key={req}
+                      className={`px-2 py-0.5 rounded text-[10px] ${covered ? 'bg-emerald-500/20 text-emerald-400' : 'bg-amber-500/20 text-amber-400'}`}
+                    >
+                      {req}: {covered ? '✓' : '✗'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         </DebugSection>
       )}
@@ -402,20 +506,55 @@ function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
         </DebugSection>
       )}
 
-      {debug.llm_tokens && (
-        <DebugSection icon={<Brain size={13} />} title="LLM Tokens">
-          <div className="flex gap-3">
-            <StatPill label="Input" value={debug.llm_tokens.input} />
-            <StatPill label="Output" value={debug.llm_tokens.output} />
+      {(debug.llm_tokens || debug.cost_usd != null) && (
+        <DebugSection icon={<Brain size={13} />} title="LLM Usage & Cost">
+          <div className="flex flex-wrap gap-3 items-center">
+            {debug.llm_tokens && (
+              <>
+                <StatPill label="Input" value={debug.llm_tokens.input} />
+                <StatPill label="Output" value={debug.llm_tokens.output} />
+              </>
+            )}
+            {debug.cost_usd != null && debug.cost_usd > 0 && (
+              <StatPill label="Cost" value={`$${debug.cost_usd.toFixed(6)}`} />
+            )}
           </div>
+          {debug.llm_usage_breakdown && debug.llm_usage_breakdown.length > 0 && (
+            <div className="mt-2 space-y-1 text-[11px] text-zinc-500">
+              {debug.llm_usage_breakdown.map((u, i) => (
+                <div key={i} className="flex gap-2">
+                  <span className="text-zinc-400">{u.model}</span>
+                  <span>in:{u.input} out:{u.output}</span>
+                  <span className="text-emerald-400">${(u.cost_usd ?? 0).toFixed(6)}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </DebugSection>
       )}
 
-      {debug.reviewer_reasons && debug.reviewer_reasons.length > 0 && (
+      {(debug.reviewer_reasons?.length || debug.claim_to_citation_map) && (
         <DebugSection icon={<AlertTriangle size={13} />} title="Reviewer">
-          <ul className="list-disc pl-4 space-y-0.5 text-zinc-400">
-            {debug.reviewer_reasons.map((r, i) => <li key={i}>{r}</li>)}
-          </ul>
+          <div className="space-y-2 text-zinc-400">
+            {debug.reviewer_reasons && debug.reviewer_reasons.length > 0 && (
+              <ul className="list-disc pl-4 space-y-0.5">
+                {debug.reviewer_reasons.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            )}
+            {debug.claim_to_citation_map && Object.keys(debug.claim_to_citation_map).length > 0 && (
+              <div>
+                <div className="mb-1 text-zinc-500">Claim → citations:</div>
+                <div className="font-mono text-[11px] space-y-1">
+                  {Object.entries(debug.claim_to_citation_map).slice(0, 5).map(([claim, ids]) => (
+                    <div key={claim} className="break-words">
+                      <span className="text-zinc-300">{claim.length > 50 ? claim.slice(0, 50) + '…' : claim}</span>
+                      <span className="text-zinc-500"> → [{ids.join(', ')}]</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </DebugSection>
       )}
 

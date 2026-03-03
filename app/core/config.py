@@ -96,6 +96,14 @@ class Settings(BaseSettings):
     )
     retrieval_rrf_k: int = Field(default=60, ge=1, le=200, description="RRF constant k (higher = less rank sensitivity)")
     max_retrieval_attempts: int = Field(default=2, description="Max retrieval attempts before ASK_USER/ESCALATE")
+    retrieval_profile_engine_enabled: bool = Field(
+        default=True,
+        description="Workstream 3: Use RetrievalPlan from QuerySpec. Disable to fall back to legacy heuristics.",
+    )
+    evidence_set_builder_enabled: bool = Field(
+        default=True,
+        description="Workstream 3: Build EvidenceSet from CandidatePool. Disable for legacy top-k only.",
+    )
 
     # Evidence Quality Gate (Phase 1)
     evidence_quality_enabled: bool = Field(default=True, description="Enable evidence quality gate before LLM")
@@ -117,9 +125,25 @@ class Settings(BaseSettings):
     chunk_min_tokens: int = Field(default=300, ge=100, le=1000)
     chunk_max_tokens: int = Field(default=700, ge=200, le=1500)
 
+    # Doc type classifier (crawl/ingestion)
+    doc_type_classifier_enabled: bool = Field(
+        default=False,
+        description="Use LLM to classify doc_type from content (policy, tos, faq, howto, pricing, other). When disabled, uses URL-based inference.",
+    )
+    retrieval_doc_type_use_llm: bool = Field(
+        default=False,
+        description="Use LLM to select doc types for retrieval (semantic routing). When disabled, uses keyword heuristics.",
+    )
+
     # Rate limiting
     rate_limit_requests: int = Field(default=60, description="Requests per window")
     rate_limit_window_seconds: int = Field(default=60, description="Rate limit window")
+
+    # Pipeline logging (trace all RAG stages for debugging)
+    pipeline_logging_enabled: bool = Field(
+        default=True,
+        description="Log each pipeline stage (answer_service, retrieve, assess, decide, generate, verify)",
+    )
 
     # PII redaction
     pii_redact_emails: bool = Field(default=True)
@@ -132,6 +156,14 @@ class Settings(BaseSettings):
 
     # LLM fallback & caching
     llm_fallback_model: str = Field(default="gpt-3.5-turbo", description="Fallback model on primary failure")
+    llm_model_economy: str = Field(
+        default="gpt-4o-mini",
+        description="Economy model for non-critical tasks (normalizer, decision_router, evidence_evaluator, final_polish)",
+    )
+    llm_task_aware_routing_enabled: bool = Field(
+        default=True,
+        description="Task-aware routing: primary (gpt-5.2) for generate/self_critic, economy for others",
+    )
     llm_cache_ttl_seconds: int = Field(default=3600, description="Response cache TTL")
     llm_prompt_cache_key: str = Field(default="", description="OpenAI prompt_cache_key for better cache hits")
     llm_prompt_cache_retention: str = Field(default="in_memory", description="OpenAI cache: in_memory or 24h")
@@ -149,11 +181,23 @@ class Settings(BaseSettings):
         default="gpt-4o-mini",
         description="Model for normalizer LLM (lightweight for cost; e.g. gpt-4o-mini)",
     )
+    normalizer_domain_terms: str = Field(
+        default="",
+        description="Config-driven domain override (UPGRADE_RAG_DESIGN). Comma-separated terms for rule-based entity extraction, e.g. vps,windows,linux,pricing. Empty = generic path.",
+    )
+    normalizer_query_expansion: bool = Field(
+        default=False,
+        description="Config-driven domain override. Enable intent-based BM25 query expansion (adds pricing,order,policy,etc. to keyword queries).",
+    )
+    normalizer_slots_enabled: bool = Field(
+        default=False,
+        description="Config-driven domain override. Enable rule-based slot extraction (product_type, os, billing_cycle, region) for deployment-specific compatibility.",
+    )
 
     # Phase 3: Decision Router
     decision_router_enabled: bool = Field(default=True, description="Enable decision router before LLM (ASK_USER/ESCALATE without LLM call)")
     decision_router_use_llm: bool = Field(
-        default=False,
+        default=True,
         description="Use LLM for gray zone decisions (hybrid: deterministic rules first)",
     )
     decision_router_llm_model: str = Field(default="gpt-4o-mini", description="Model for decision router LLM")
@@ -162,9 +206,21 @@ class Settings(BaseSettings):
     evidence_evaluator_enabled: bool = Field(default=False, description="LLM evaluates evidence relevance, advises Retry Planner")
     evidence_evaluator_llm_model: str = Field(default="gpt-4o-mini", description="Model for evidence evaluator")
 
+    # Evidence Quality Gate – LLM vs regex
+    evidence_quality_use_llm: bool = Field(
+        default=True,
+        description="Use LLM for evidence quality gate (flexible, query-aware). When disabled, uses rule-based regex scoring.",
+    )
+
     # Self-Critic (archi_v3)
     self_critic_enabled: bool = Field(default=False, description="LLM self-critic after answer generation; regenerate on fail")
     self_critic_regenerate_max: int = Field(default=1, ge=0, le=2, description="Max regenerate attempts on self-critic fail")
+
+    # Workstream 5: Claim-level review
+    claim_level_review_enabled: bool = Field(
+        default=True,
+        description="Enable claim-level trim and lane downgrade instead of full rejection",
+    )
 
     # Final Polish (archi_v3)
     final_polish_enabled: bool = Field(default=False, description="LLM final polish for clarity, structure, tone")

@@ -55,7 +55,7 @@ def _build_ask_user_evidence_gap(
     if partial_links:
         intro = "I found some relevant pages but couldn't extract enough detail for a full answer. "
         links = "\n".join(f"• {url}" for url in partial_links[:3])
-        return f"{intro}Here are links you can check:\n{links}\n\nCould you rephrase your question or tell me what specifically you'd like to compare?"
+        return f"{intro}Here are links you can check:\n{links}\n\nCould you rephrase your question or tell me what specifically you need?"
 
     if not missing:
         return "I couldn't find enough specific information. Could you rephrase or narrow your question?"
@@ -79,11 +79,61 @@ def _build_ask_user_ambiguous(query_spec: QuerySpec) -> str:
         intro = "I'd like to clarify. "
         questions = "\n".join(f"• {q}" for q in qs[:3])
         return f"{intro}\n{questions}"
-    return "Could you clarify what you'd like to compare? For example: another provider's plan, or a specific product?"
+    return "Could you clarify what you need? For example: a specific product, feature, or topic?"
 
 
 def _build_escalate_response() -> str:
     return "This request requires human review. A support agent will follow up shortly."
+
+
+def _resolve_hard_requirements(
+    query_spec: QuerySpec | None,
+) -> list[str]:
+    """Resolve the must-have evidence list for router decisions."""
+    if query_spec and getattr(query_spec, "hard_requirements", None):
+        return list(dict.fromkeys(query_spec.hard_requirements or []))
+    return []
+
+
+def _can_offer_weak_pass(
+    query_spec: QuerySpec | None,
+    quality_report: QualityReport | None,
+    evidence: list[EvidenceChunk],
+    required_evidence: list[str],
+) -> bool:
+    """Return True when a bounded partial answer is safe enough.
+
+    PASS_WEAK is only available when:
+    - we have some evidence,
+    - the query is not high risk,
+    - clarification is not strictly required,
+    - and all declared hard requirements are covered.
+    """
+    if not quality_report or not evidence:
+        return False
+
+    if query_spec and query_spec.is_ambiguous:
+        return False
+
+    if query_spec and query_spec.risk_level == "high":
+        return False
+
+    if query_spec and not getattr(query_spec, "answerable_without_clarification", True):
+        return False
+
+    if query_spec and getattr(query_spec, "answer_mode_hint", "strong") == "ask_user":
+        return False
+
+    hard_requirements = _resolve_hard_requirements(query_spec)
+    if not hard_requirements:
+        return False
+
+    hard_coverage = quality_report.hard_requirement_coverage or {}
+    for req in hard_requirements:
+        if hard_coverage.get(req) is not True:
+            return False
+
+    return True
 
 
 def route(
@@ -114,6 +164,8 @@ def route(
             clarifying_questions=query_spec.clarifying_questions,
             partial_links=[],
             answer=answer,
+            answer_policy="clarify",
+            lane="ASK_USER",
         )
 
     # 2. High-risk + insufficient evidence → ESCALATE
@@ -124,14 +176,28 @@ def route(
             clarifying_questions=[],
             partial_links=[],
             answer=_build_escalate_response(),
+            answer_policy="human_handoff",
+            lane="ESCALATE",
         )
 
-    # 3. Evidence quality gate failed → ASK_USER (evidence gap)
+    # 3. Evidence quality gate failed:
+    #    - PASS_WEAK when all hard requirements are still covered
+    #    - otherwise ASK_USER (evidence gap)
     if not passes_quality_gate:
+        if _can_offer_weak_pass(query_spec, quality_report, evidence, required_evidence):
+            return DecisionResult(
+                decision="PASS",
+                reason="partial_sufficient",
+                clarifying_questions=[],
+                partial_links=[],
+                answer_policy="bounded",
+                lane="PASS_WEAK",
+            )
+
         partial_links = _extract_partial_links(evidence)
         answer = _build_ask_user_evidence_gap(
             query_spec or _fallback_query_spec(),
-            quality_report or QualityReport(0.0, {}, {}, None, None),
+            quality_report or QualityReport(0.0, {}, [], None, None),
             partial_links,
         )
         return DecisionResult(
@@ -140,6 +206,8 @@ def route(
             clarifying_questions=[],
             partial_links=partial_links,
             answer=answer,
+            answer_policy="clarify",
+            lane="ASK_USER",
         )
 
     # 4. Missing constraints (from QuerySpec) – optional, for future
@@ -150,6 +218,8 @@ def route(
             clarifying_questions=query_spec.clarifying_questions,
             partial_links=[],
             answer=_build_ask_user_missing_constraints(query_spec),
+            answer_policy="clarify",
+            lane="ASK_USER",
         )
 
     # 5. PASS → proceed to LLM
@@ -158,16 +228,23 @@ def route(
         reason="sufficient",
         clarifying_questions=[],
         partial_links=[],
+        answer_policy="direct",
+        lane="PASS_STRONG",
     )
 
 
 DECISION_ROUTER_LLM_PROMPT = """Given the context, should we PASS (proceed to generate answer) or ASK_USER (need clarification)?
 
-We have partial evidence. Output JSON only:
+Output JSON only:
 {"decision": "PASS" | "ASK_USER", "reason": "brief reason"}
 
-PASS if we have enough to give a useful (possibly cautious) answer.
-ASK_USER if evidence is too weak or query needs clarification."""
+PASS when:
+- Greetings, chitchat, or questions that don't need documentation (hi, hello, hey, hiii, thanks, ok, bye). We can answer without evidence.
+- We have enough evidence to give a useful (possibly cautious) answer.
+
+ASK_USER when:
+- Evidence is too weak AND the query requires specific documentation (pricing, policy, how-to).
+- Query needs clarification (ambiguous referent)."""
 
 
 async def route_hybrid(
@@ -194,12 +271,19 @@ async def route_hybrid(
         return dr
 
     try:
+        from app.services.model_router import get_model_for_task
+
         llm = get_llm_gateway()
-        model = getattr(get_settings(), "decision_router_llm_model", "gpt-4o-mini")
-        qr = quality_report or QualityReport(0.0, {}, {}, None, None)
+        model = get_model_for_task("decision_router")
+        qr = quality_report or QualityReport(0.0, {}, [], None, None)
+        user_goal = getattr(query_spec, "user_goal", "") if query_spec else ""
+        intent = getattr(query_spec, "intent", "") if query_spec else ""
         user_content = f"""Query: {query}
+Intent: {intent}
+User goal: {user_goal}
 Quality score: {qr.quality_score}
 Missing signals: {qr.missing_signals}
+Hard requirement coverage: {qr.hard_requirement_coverage or {}}
 Evidence chunks: {len(evidence)}
 Required evidence: {required_evidence}"""
 
@@ -240,6 +324,8 @@ Required evidence: {required_evidence}"""
                 reason="llm_gray_zone_override",
                 clarifying_questions=[],
                 partial_links=[],
+                answer_policy="bounded",
+                lane="PASS_WEAK",
             )
     except Exception as e:
         logger.warning("decision_router_llm_failed", error=str(e))

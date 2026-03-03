@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { documents, type Document, DOC_TYPES } from '../api/client'
+import { documents, admin, type Document, type DocType } from '../api/client'
 import {
   ArrowLeft,
   Save,
@@ -15,6 +15,7 @@ import {
   Clock,
   Link as LinkIcon,
   Tag,
+  RefreshCw,
 } from 'lucide-react'
 
 export default function DocumentDetail() {
@@ -28,6 +29,14 @@ export default function DocumentDetail() {
   const [editDocType, setEditDocType] = useState('')
   const [editMetadata, setEditMetadata] = useState('')
   const [saving, setSaving] = useState(false)
+  const [reCrawling, setReCrawling] = useState(false)
+  const [docTypes, setDocTypes] = useState<DocType[]>([])
+
+  const docTypeOptions = docTypes
+
+  useEffect(() => {
+    admin.listDocTypes().then(setDocTypes).catch(() => {})
+  }, [])
 
   const load = async () => {
     if (!id) return
@@ -74,6 +83,25 @@ export default function DocumentDetail() {
       setError(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleReCrawl = async () => {
+    if (!id || !doc) return
+    if (!doc.source_url?.startsWith('http')) {
+      setError('Document source_url is not crawlable (must be http or https)')
+      return
+    }
+    setReCrawling(true)
+    setError(null)
+    try {
+      const res = await documents.reCrawl(id)
+      setDoc((prev) => prev ? { ...prev, title: res.title, chunks_count: res.chunks_count } : prev)
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Re-crawl failed')
+    } finally {
+      setReCrawling(false)
     }
   }
 
@@ -154,6 +182,17 @@ export default function DocumentDetail() {
               Edit
             </button>
           )}
+          {doc.source_url?.startsWith('http') && (
+            <button
+              className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50"
+              onClick={handleReCrawl}
+              disabled={reCrawling}
+              title="Re-crawl latest content from URL"
+            >
+              {reCrawling ? <Loader2 size={14} className="animate-spin-slow" /> : <RefreshCw size={14} />}
+              Re-crawl
+            </button>
+          )}
           <button
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium
                        text-red-400 border border-red-500/20 hover:bg-red-500/10 transition-colors"
@@ -187,7 +226,7 @@ export default function DocumentDetail() {
             <div>
               <label className="block text-sm font-medium text-zinc-400 mb-2">Type</label>
               <select value={editDocType} onChange={(e) => setEditDocType(e.target.value)} className="w-full px-4 py-2.5 rounded-xl input-glass text-sm" aria-label="Type">
-                {DOC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+                {docTypeOptions.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
               </select>
             </div>
             <div>

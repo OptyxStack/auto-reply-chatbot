@@ -4,6 +4,7 @@ import asyncio
 import json
 import queue
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -14,6 +15,11 @@ from app.api.schemas import (
     AppConfigUpdateRequest,
     ArchiConfigResponse,
     ArchiConfigUpdateRequest,
+    DocTypeCreateRequest,
+    DocTypeResponse,
+    DocTypeUpdateRequest,
+    SystemPromptResponse,
+    SystemPromptUpdateRequest,
     LLMConfigResponse,
     LLMConfigUpdateRequest,
     CheckWhmcsCookiesRequest,
@@ -34,10 +40,11 @@ from app.api.schemas import (
 )
 from app.core.auth import verify_admin_api_key
 from app.core.logging import get_logger
-from app.db.models import AppConfig, Intent, Ticket
+from app.db.models import AppConfig, DocTypeModel, Intent, Ticket
 from app.db.session import get_db
 from app.services.archi_config import refresh_cache as refresh_archi_config
 from app.services.branding_config import refresh_cache
+from app.services.doc_type_service import refresh_doc_type_cache
 from app.services.llm_config import refresh_cache as refresh_llm_config
 
 logger = get_logger(__name__)
@@ -442,17 +449,27 @@ async def get_archi_config(_auth: str = Depends(verify_admin_api_key)):
     """Get archi v3 feature flags from cache/DB."""
     from app.services.archi_config import (
         get_decision_router_use_llm,
+        get_doc_type_classifier_enabled,
         get_evidence_evaluator_enabled,
+        get_evidence_quality_use_llm,
         get_final_polish_enabled,
         get_language_detect_enabled,
+        get_llm_model_economy,
+        get_llm_task_aware_routing_enabled,
+        get_retrieval_doc_type_use_llm,
         get_self_critic_enabled,
     )
     return ArchiConfigResponse(
         language_detect_enabled=get_language_detect_enabled(),
         decision_router_use_llm=get_decision_router_use_llm(),
         evidence_evaluator_enabled=get_evidence_evaluator_enabled(),
+        evidence_quality_use_llm=get_evidence_quality_use_llm(),
         self_critic_enabled=get_self_critic_enabled(),
         final_polish_enabled=get_final_polish_enabled(),
+        doc_type_classifier_enabled=get_doc_type_classifier_enabled(),
+        retrieval_doc_type_use_llm=get_retrieval_doc_type_use_llm(),
+        llm_model_economy=get_llm_model_economy(),
+        llm_task_aware_routing_enabled=get_llm_task_aware_routing_enabled(),
     )
 
 
@@ -465,17 +482,22 @@ async def update_archi_config(
     """Update archi v3 feature flags. Only provided fields are updated."""
     from app.db.models import generate_uuid
 
-    updates = [
-        ("language_detect_enabled", body.language_detect_enabled),
-        ("decision_router_use_llm", body.decision_router_use_llm),
-        ("evidence_evaluator_enabled", body.evidence_evaluator_enabled),
-        ("self_critic_enabled", body.self_critic_enabled),
-        ("final_polish_enabled", body.final_polish_enabled),
+    updates: list[tuple[str, Any, bool]] = [
+        ("language_detect_enabled", body.language_detect_enabled, True),
+        ("decision_router_use_llm", body.decision_router_use_llm, True),
+        ("evidence_evaluator_enabled", body.evidence_evaluator_enabled, True),
+        ("evidence_quality_use_llm", body.evidence_quality_use_llm, True),
+        ("self_critic_enabled", body.self_critic_enabled, True),
+        ("final_polish_enabled", body.final_polish_enabled, True),
+        ("doc_type_classifier_enabled", body.doc_type_classifier_enabled, True),
+        ("retrieval_doc_type_use_llm", body.retrieval_doc_type_use_llm, True),
+        ("llm_model_economy", body.llm_model_economy, False),
+        ("llm_task_aware_routing_enabled", body.llm_task_aware_routing_enabled, True),
     ]
-    for key, value in updates:
+    for key, value, is_bool in updates:
         if value is None:
             continue
-        str_val = "true" if value else "false"
+        str_val = "true" if (is_bool and value) else ("false" if is_bool else str(value))
         result = await db.execute(select(AppConfig).where(AppConfig.key == key).limit(1))
         row = result.scalars().one_or_none()
         if row:
@@ -488,17 +510,27 @@ async def update_archi_config(
 
     from app.services.archi_config import (
         get_decision_router_use_llm,
+        get_doc_type_classifier_enabled,
         get_evidence_evaluator_enabled,
+        get_evidence_quality_use_llm,
         get_final_polish_enabled,
         get_language_detect_enabled,
+        get_llm_model_economy,
+        get_llm_task_aware_routing_enabled,
+        get_retrieval_doc_type_use_llm,
         get_self_critic_enabled,
     )
     return ArchiConfigResponse(
         language_detect_enabled=get_language_detect_enabled(),
         decision_router_use_llm=get_decision_router_use_llm(),
         evidence_evaluator_enabled=get_evidence_evaluator_enabled(),
+        evidence_quality_use_llm=get_evidence_quality_use_llm(),
         self_critic_enabled=get_self_critic_enabled(),
         final_polish_enabled=get_final_polish_enabled(),
+        doc_type_classifier_enabled=get_doc_type_classifier_enabled(),
+        retrieval_doc_type_use_llm=get_retrieval_doc_type_use_llm(),
+        llm_model_economy=get_llm_model_economy(),
+        llm_task_aware_routing_enabled=get_llm_task_aware_routing_enabled(),
     )
 
 
@@ -507,11 +539,41 @@ async def refresh_config_cache(
     db: AsyncSession = Depends(get_db),
     _auth: str = Depends(verify_admin_api_key),
 ):
-    """Refresh in-memory cache for system prompt, intents, LLM config, and archi config from DB."""
+    """Refresh in-memory cache for system prompt, intents, doc types, LLM config, and archi config from DB."""
     await refresh_cache(db)
+    await refresh_doc_type_cache(db)
     await refresh_llm_config(db)
     await refresh_archi_config(db)
     return {"status": "ok", "message": "Cache refreshed"}
+
+
+@router.get("/config/system-prompt", response_model=SystemPromptResponse)
+async def get_system_prompt_config(_auth: str = Depends(verify_admin_api_key)):
+    """Get current system prompt (from DB or fallback). Never 404."""
+    from app.services.branding_config import get_system_prompt
+
+    return SystemPromptResponse(value=get_system_prompt())
+
+
+@router.put("/config/system-prompt", response_model=SystemPromptResponse)
+async def update_system_prompt_config(
+    body: SystemPromptUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Update system prompt. Stored in DB, cache refreshed."""
+    from app.db.models import generate_uuid
+
+    result = await db.execute(select(AppConfig).where(AppConfig.key == "system_prompt").limit(1))
+    row = result.scalars().one_or_none()
+    if row:
+        row.value = body.value
+    else:
+        row = AppConfig(id=generate_uuid(), key="system_prompt", value=body.value)
+        db.add(row)
+    await db.flush()
+    await refresh_cache(db)
+    return SystemPromptResponse(value=body.value)
 
 
 @router.get("/config/{key}", response_model=AppConfigResponse)
@@ -629,3 +691,115 @@ async def delete_intent(
     await db.flush()
     await refresh_cache(db)
     return {"status": "ok", "message": "Intent deleted"}
+
+
+# --- Doc types (user-managed document type catalog) ---
+
+
+@router.get("/doc-types", response_model=list[DocTypeResponse])
+async def list_doc_types(
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """List all doc types ordered by sort_order."""
+    result = await db.execute(select(DocTypeModel).order_by(DocTypeModel.sort_order))
+    rows = result.scalars().all()
+    return [
+        DocTypeResponse(
+            id=r.id,
+            key=r.key,
+            label=r.label,
+            description=r.description,
+            enabled=r.enabled,
+            sort_order=r.sort_order,
+        )
+        for r in rows
+    ]
+
+
+@router.post("/doc-types", response_model=DocTypeResponse)
+async def create_doc_type(
+    body: DocTypeCreateRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Create a new doc type."""
+    from app.db.models import generate_uuid
+
+    result = await db.execute(select(DocTypeModel).where(DocTypeModel.key == body.key).limit(1))
+    if result.scalars().one_or_none():
+        raise HTTPException(status_code=409, detail=f"Doc type key already exists: {body.key}")
+
+    key_safe = body.key.strip().lower().replace(" ", "_")
+    doc_type = DocTypeModel(
+        id=generate_uuid(),
+        key=key_safe,
+        label=body.label,
+        description=body.description,
+        enabled=body.enabled,
+        sort_order=body.sort_order,
+    )
+    db.add(doc_type)
+    await db.commit()
+    await db.refresh(doc_type)
+    await refresh_doc_type_cache(db)
+    return DocTypeResponse(
+        id=doc_type.id,
+        key=doc_type.key,
+        label=doc_type.label,
+        description=doc_type.description,
+        enabled=doc_type.enabled,
+        sort_order=doc_type.sort_order,
+    )
+
+
+@router.put("/doc-types/{doc_type_id}", response_model=DocTypeResponse)
+async def update_doc_type(
+    doc_type_id: str,
+    body: DocTypeUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Update doc type by id."""
+    result = await db.execute(select(DocTypeModel).where(DocTypeModel.id == doc_type_id).limit(1))
+    doc_type = result.scalars().one_or_none()
+    if not doc_type:
+        raise HTTPException(status_code=404, detail="Doc type not found")
+
+    if body.label is not None:
+        doc_type.label = body.label
+    if body.description is not None:
+        doc_type.description = body.description
+    if body.enabled is not None:
+        doc_type.enabled = body.enabled
+    if body.sort_order is not None:
+        doc_type.sort_order = body.sort_order
+
+    await db.commit()
+    await db.refresh(doc_type)
+    await refresh_doc_type_cache(db)
+    return DocTypeResponse(
+        id=doc_type.id,
+        key=doc_type.key,
+        label=doc_type.label,
+        description=doc_type.description,
+        enabled=doc_type.enabled,
+        sort_order=doc_type.sort_order,
+    )
+
+
+@router.delete("/doc-types/{doc_type_id}")
+async def delete_doc_type(
+    doc_type_id: str,
+    db: AsyncSession = Depends(get_db),
+    _auth: str = Depends(verify_admin_api_key),
+):
+    """Delete doc type by id."""
+    result = await db.execute(select(DocTypeModel).where(DocTypeModel.id == doc_type_id).limit(1))
+    doc_type = result.scalars().one_or_none()
+    if not doc_type:
+        raise HTTPException(status_code=404, detail="Doc type not found")
+    await db.delete(doc_type)
+    await db.commit()
+    await refresh_doc_type_cache(db)
+    return {"status": "ok", "message": "Doc type deleted"}

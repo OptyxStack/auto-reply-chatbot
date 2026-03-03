@@ -28,8 +28,8 @@ def _doc_type_from_url(url: str) -> str:
     return "other"
 
 
-def load_pages_json(path: Path) -> list[dict[str, Any]]:
-    """Load JSON with pages array: [{url, title, text}]. Used by sample_docs.json."""
+def load_pages_json(path: Path, doc_type_override: str | None = None) -> list[dict[str, Any]]:
+    """Load JSON with pages array: [{url, title, text}]. Used by sample_docs.json and {doc_type}.json."""
     with open(path) as f:
         data = json.load(f)
     docs = []
@@ -38,11 +38,12 @@ def load_pages_json(path: Path) -> list[dict[str, Any]]:
         text = p.get("text", "").strip()
         if not url or len(text) < 50:
             continue
+        doc_type = doc_type_override or data.get("doc_type") or _doc_type_from_url(url)
         docs.append({
             "url": url,
             "title": p.get("title", "Untitled"),
             "raw_text": text,
-            "doc_type": _doc_type_from_url(url),
+            "doc_type": doc_type,
             "metadata": {"source": data.get("source", "")},
             "source_file": path.name,
         })
@@ -197,9 +198,11 @@ LOADERS: dict[str, Any] = {
 
 
 def load_all_docs(source_dir: Path, files: list[str] | None = None) -> list[dict[str, Any]]:
-    """Load docs from all JSON files in source_dir."""
+    """Load docs from all JSON files in source_dir. Includes {doc_type}.json (policy.json, faq.json, etc.)."""
     all_docs = []
     seen_urls: set[str] = set()
+    known = set(LOADERS.keys())
+
     for fname, loader in LOADERS.items():
         if files and fname not in files:
             continue
@@ -215,4 +218,23 @@ def load_all_docs(source_dir: Path, files: list[str] | None = None) -> list[dict
                     all_docs.append(d)
         except Exception:
             pass
+
+    # Load doc_type files (policy.json, faq.json, howto.json, etc.) not in LOADERS
+    if source_dir.exists():
+        for path in source_dir.glob("*.json"):
+            if path.name in known:
+                continue
+            if files and path.name not in files:
+                continue
+            try:
+                doc_type = path.stem.lower().replace(" ", "_")
+                docs = load_pages_json(path, doc_type_override=doc_type)
+                for d in docs:
+                    url = d.get("url")
+                    if url and url not in seen_urls:
+                        seen_urls.add(url)
+                        all_docs.append(d)
+            except Exception:
+                pass
+
     return all_docs

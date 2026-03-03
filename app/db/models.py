@@ -27,12 +27,31 @@ class Base(DeclarativeBase):
 
 
 class DocType(str, Enum):
+    """Legacy enum for default values. Prefer DocTypeModel from DB."""
+
     POLICY = "policy"
     TOS = "tos"
     FAQ = "faq"
     HOWTO = "howto"
     PRICING = "pricing"
     OTHER = "other"
+
+
+class DocTypeModel(Base):
+    """Document type catalog. User can CRUD. Documents reference by key."""
+
+    __tablename__ = "doc_types"
+
+    id: Mapped[str] = mapped_column(UUID(as_uuid=False), primary_key=True, default=generate_uuid)
+    key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+    sort_order: Mapped[int] = mapped_column(nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class MessageRole(str, Enum):

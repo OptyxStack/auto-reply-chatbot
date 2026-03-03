@@ -139,6 +139,10 @@ class CrawlWebsiteRequest(BaseModel):
     max_pages: int = Field(default=50, ge=1, le=500, description="Maximum number of pages to crawl")
     max_depth: int = Field(default=3, ge=1, le=10, description="Maximum link depth from seed URL")
     ingest: bool = Field(default=True, description="If true, ingest crawled docs into knowledge base")
+    exclude_prefixes: list[str] = Field(
+        default_factory=list,
+        description="URL prefixes to exclude. Any URL starting with one of these will not be crawled (e.g. https://example.com/admin)",
+    )
 
 
 class CrawledPage(BaseModel):
@@ -152,6 +156,28 @@ class CrawlWebsiteResponse(BaseModel):
     pages_crawled: int
     pages_ingested: int
     pages: list[CrawledPage] = Field(default_factory=list, description="List of crawled pages")
+
+
+class ReCrawlAllResponse(BaseModel):
+    """Response for re-crawl-all: update all documents with http(s) source_url."""
+
+    status: str = "ok"
+    total: int = Field(description="Total documents with crawlable URLs")
+    updated: int = Field(description="Documents successfully re-crawled and re-ingested")
+    skipped: int = Field(description="Documents skipped (unchanged or minimal content)")
+    error: int = Field(description="Documents that failed to fetch")
+    errors: list[str] = Field(default_factory=list, description="Error messages (first 10)")
+
+
+class ReCrawlDocumentResponse(BaseModel):
+    """Response for re-crawl single document."""
+
+    status: str = "ok"
+    document_id: str
+    title: str
+    source_url: str
+    chunks_count: int
+    updated: bool = Field(description="True if content changed and was re-ingested")
 
 
 # --- Admin / Ingest ---
@@ -190,6 +216,18 @@ class AppConfigUpdateRequest(BaseModel):
     value: str = Field(..., min_length=1)
 
 
+class SystemPromptResponse(BaseModel):
+    """System prompt for LLM - from DB with fallback."""
+
+    value: str
+
+
+class SystemPromptUpdateRequest(BaseModel):
+    """Update system prompt."""
+
+    value: str = Field(..., min_length=1)
+
+
 class LLMConfigResponse(BaseModel):
     """LLM config (model, token, URL) - from DB with env fallback."""
 
@@ -214,8 +252,13 @@ class ArchiConfigResponse(BaseModel):
     language_detect_enabled: bool
     decision_router_use_llm: bool
     evidence_evaluator_enabled: bool
+    evidence_quality_use_llm: bool = True
     self_critic_enabled: bool
     final_polish_enabled: bool
+    doc_type_classifier_enabled: bool = False
+    retrieval_doc_type_use_llm: bool = False
+    llm_model_economy: str = "gpt-4o-mini"
+    llm_task_aware_routing_enabled: bool = True
 
 
 class ArchiConfigUpdateRequest(BaseModel):
@@ -224,8 +267,13 @@ class ArchiConfigUpdateRequest(BaseModel):
     language_detect_enabled: bool | None = None
     decision_router_use_llm: bool | None = None
     evidence_evaluator_enabled: bool | None = None
+    evidence_quality_use_llm: bool | None = None
     self_critic_enabled: bool | None = None
     final_polish_enabled: bool | None = None
+    doc_type_classifier_enabled: bool | None = None
+    retrieval_doc_type_use_llm: bool | None = None
+    llm_model_economy: str | None = None
+    llm_task_aware_routing_enabled: bool | None = None
 
 
 class IntentResponse(BaseModel):
@@ -248,6 +296,30 @@ class IntentCreateRequest(BaseModel):
 class IntentUpdateRequest(BaseModel):
     patterns: str | None = None
     answer: str | None = None
+    enabled: bool | None = None
+    sort_order: int | None = None
+
+
+class DocTypeResponse(BaseModel):
+    id: str
+    key: str
+    label: str
+    description: str | None
+    enabled: bool
+    sort_order: int
+
+
+class DocTypeCreateRequest(BaseModel):
+    key: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(None, max_length=512)
+    enabled: bool = True
+    sort_order: int = 0
+
+
+class DocTypeUpdateRequest(BaseModel):
+    label: str | None = Field(None, min_length=1, max_length=128)
+    description: str | None = None
     enabled: bool | None = None
     sort_order: int | None = None
 

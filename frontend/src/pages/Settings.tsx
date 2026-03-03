@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { admin, type ArchiConfig, type LLMConfig } from '../api/client'
-import { Loader2, Cpu, Key, Link2, Save, RefreshCw, CheckCircle2, AlertCircle, Sparkles } from 'lucide-react'
+import { Loader2, Cpu, Key, Link2, Save, RefreshCw, CheckCircle2, AlertCircle, Sparkles, FileText } from 'lucide-react'
 
 export default function Settings() {
   const [, setConfig] = useState<LLMConfig | null>(null)
@@ -20,12 +20,20 @@ export default function Settings() {
   const [languageDetect, setLanguageDetect] = useState(true)
   const [decisionRouterLlm, setDecisionRouterLlm] = useState(false)
   const [evidenceEvaluator, setEvidenceEvaluator] = useState(false)
+  const [evidenceQualityUseLlm, setEvidenceQualityUseLlm] = useState(true)
   const [selfCritic, setSelfCritic] = useState(false)
   const [finalPolish, setFinalPolish] = useState(false)
+  const [docTypeClassifier, setDocTypeClassifier] = useState(false)
+  const [retrievalDocTypeUseLlm, setRetrievalDocTypeUseLlm] = useState(false)
+  const [llmModelEconomy, setLlmModelEconomy] = useState('gpt-4o-mini')
+  const [llmTaskAwareRouting, setLlmTaskAwareRouting] = useState(true)
+
+  const [systemPrompt, setSystemPrompt] = useState('')
+  const [savingPrompt, setSavingPrompt] = useState(false)
 
   useEffect(() => {
-    Promise.all([admin.getLLMConfig(), admin.getArchiConfig()])
-      .then(([llmData, archiData]) => {
+    Promise.all([admin.getLLMConfig(), admin.getArchiConfig(), admin.getSystemPrompt()])
+      .then(([llmData, archiData, promptData]) => {
         setConfig(llmData)
         setLlmModel(llmData.llm_model)
         setLlmFallbackModel(llmData.llm_fallback_model)
@@ -35,8 +43,14 @@ export default function Settings() {
         setLanguageDetect(archiData.language_detect_enabled)
         setDecisionRouterLlm(archiData.decision_router_use_llm)
         setEvidenceEvaluator(archiData.evidence_evaluator_enabled)
+        setEvidenceQualityUseLlm(archiData.evidence_quality_use_llm ?? true)
         setSelfCritic(archiData.self_critic_enabled)
         setFinalPolish(archiData.final_polish_enabled)
+        setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
+        setRetrievalDocTypeUseLlm(archiData.retrieval_doc_type_use_llm ?? false)
+        setLlmModelEconomy(archiData.llm_model_economy ?? 'gpt-4o-mini')
+        setLlmTaskAwareRouting(archiData.llm_task_aware_routing_enabled ?? true)
+        setSystemPrompt(promptData.value)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed to load config'))
       .finally(() => setLoading(false))
@@ -70,7 +84,11 @@ export default function Settings() {
     setRefreshing(true)
     try {
       await admin.refreshConfigCache()
-      const [llmData, archiData] = await Promise.all([admin.getLLMConfig(), admin.getArchiConfig()])
+      const [llmData, archiData, promptData] = await Promise.all([
+        admin.getLLMConfig(),
+        admin.getArchiConfig(),
+        admin.getSystemPrompt(),
+      ])
       setConfig(llmData)
       setLlmModel(llmData.llm_model)
       setLlmFallbackModel(llmData.llm_fallback_model)
@@ -80,8 +98,13 @@ export default function Settings() {
       setLanguageDetect(archiData.language_detect_enabled)
       setDecisionRouterLlm(archiData.decision_router_use_llm)
       setEvidenceEvaluator(archiData.evidence_evaluator_enabled)
+      setEvidenceQualityUseLlm(archiData.evidence_quality_use_llm ?? false)
       setSelfCritic(archiData.self_critic_enabled)
       setFinalPolish(archiData.final_polish_enabled)
+      setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
+      setLlmModelEconomy(archiData.llm_model_economy ?? 'gpt-4o-mini')
+      setLlmTaskAwareRouting(archiData.llm_task_aware_routing_enabled ?? true)
+      setSystemPrompt(promptData.value)
       setSuccess('Cache refreshed from DB.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to refresh')
@@ -100,8 +123,13 @@ export default function Settings() {
         language_detect_enabled: languageDetect,
         decision_router_use_llm: decisionRouterLlm,
         evidence_evaluator_enabled: evidenceEvaluator,
+        evidence_quality_use_llm: evidenceQualityUseLlm,
         self_critic_enabled: selfCritic,
         final_polish_enabled: finalPolish,
+        doc_type_classifier_enabled: docTypeClassifier,
+        retrieval_doc_type_use_llm: retrievalDocTypeUseLlm,
+        llm_model_economy: llmModelEconomy.trim(),
+        llm_task_aware_routing_enabled: llmTaskAwareRouting,
       })
       setSuccess('Archi v3 config saved.')
       const data = await admin.getArchiConfig()
@@ -109,12 +137,32 @@ export default function Settings() {
       setLanguageDetect(data.language_detect_enabled)
       setDecisionRouterLlm(data.decision_router_use_llm)
       setEvidenceEvaluator(data.evidence_evaluator_enabled)
+      setEvidenceQualityUseLlm(data.evidence_quality_use_llm ?? false)
       setSelfCritic(data.self_critic_enabled)
       setFinalPolish(data.final_polish_enabled)
+      setDocTypeClassifier(data.doc_type_classifier_enabled ?? false)
+      setRetrievalDocTypeUseLlm(data.retrieval_doc_type_use_llm ?? false)
+      setLlmModelEconomy(data.llm_model_economy ?? 'gpt-4o-mini')
+      setLlmTaskAwareRouting(data.llm_task_aware_routing_enabled ?? true)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save archi config')
     } finally {
       setSavingArchi(false)
+    }
+  }
+
+  const handleSavePrompt = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setSuccess(null)
+    setSavingPrompt(true)
+    try {
+      await admin.updateSystemPrompt({ value: systemPrompt })
+      setSuccess('System prompt saved. Cache refreshed.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to save prompt')
+    } finally {
+      setSavingPrompt(false)
     }
   }
 
@@ -238,6 +286,42 @@ export default function Settings() {
       <section className="glass rounded-2xl p-6">
         <h2 className="text-lg font-semibold text-white flex items-center gap-2.5 mb-5">
           <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center">
+            <FileText size={15} className="text-violet-400" />
+          </div>
+          System Prompt
+        </h2>
+        <p className="text-sm text-zinc-400 mb-5">
+          System prompt gửi tới LLM khi tạo câu trả lời. Chỉnh sửa để tùy chỉnh hành vi chatbot. Lưu trong DB, cache được refresh sau khi lưu.
+        </p>
+        <form onSubmit={handleSavePrompt} className="space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-zinc-500 mb-1.5">Prompt</label>
+            <textarea
+              value={systemPrompt}
+              onChange={(e) => setSystemPrompt(e.target.value)}
+              placeholder="You are a support assistant..."
+              rows={14}
+              className="w-full px-4 py-2.5 rounded-xl input-glass text-sm font-mono resize-y min-h-[200px]"
+              disabled={savingPrompt}
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={savingPrompt || !systemPrompt.trim()}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium text-white transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{
+              background: 'linear-gradient(135deg, #7c3aed 0%, #6d28d9 100%)',
+            }}
+          >
+            {savingPrompt ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            Save Prompt
+          </button>
+        </form>
+      </section>
+
+      <section className="glass rounded-2xl p-6">
+        <h2 className="text-lg font-semibold text-white flex items-center gap-2.5 mb-5">
+          <div className="w-7 h-7 rounded-lg bg-violet-500/10 flex items-center justify-center">
             <Sparkles size={15} className="text-violet-400" />
           </div>
           Archi v3
@@ -268,6 +352,13 @@ export default function Settings() {
             disabled={savingArchi}
           />
           <ToggleRow
+            label="Evidence quality (LLM)"
+            description="Use LLM for evidence quality gate instead of regex"
+            checked={evidenceQualityUseLlm}
+            onChange={setEvidenceQualityUseLlm}
+            disabled={savingArchi}
+          />
+          <ToggleRow
             label="Self-critic"
             description="Regenerate answer on self-critic fail"
             checked={selfCritic}
@@ -281,6 +372,44 @@ export default function Settings() {
             onChange={setFinalPolish}
             disabled={savingArchi}
           />
+          <ToggleRow
+            label="Doc type classifier"
+            description="Use LLM to classify crawled docs (policy, tos, faq, howto, pricing) from content instead of URL"
+            checked={docTypeClassifier}
+            onChange={setDocTypeClassifier}
+            disabled={savingArchi}
+          />
+          <ToggleRow
+            label="Retrieval doc type (LLM)"
+            description="Use LLM to select which doc types to search based on query semantics (policy, faq, pricing, etc.)"
+            checked={retrievalDocTypeUseLlm}
+            onChange={setRetrievalDocTypeUseLlm}
+            disabled={savingArchi}
+          />
+          <div className="pt-2 border-t border-white/[0.06] mt-2">
+            <div className="text-sm font-medium text-zinc-300 mb-2">Model routing</div>
+            <div className="space-y-3">
+              <ToggleRow
+                label="Task-aware routing"
+                description="Primary (gpt-5.2) for generate/self_critic, economy for normalizer/decision_router/etc."
+                checked={llmTaskAwareRouting}
+                onChange={setLlmTaskAwareRouting}
+                disabled={savingArchi}
+              />
+              <div>
+                <label className="block text-xs font-medium text-zinc-500 mb-1.5">Economy model</label>
+                <input
+                  type="text"
+                  value={llmModelEconomy}
+                  onChange={(e) => setLlmModelEconomy(e.target.value)}
+                  placeholder="gpt-4o-mini"
+                  className="w-full px-4 py-2.5 rounded-xl input-glass text-sm"
+                  disabled={savingArchi}
+                />
+                <p className="text-xs text-zinc-500 mt-1">Used for normalizer, decision_router, evidence_evaluator, evidence_quality, final_polish</p>
+              </div>
+            </div>
+          </div>
           <button
             type="submit"
             disabled={savingArchi}

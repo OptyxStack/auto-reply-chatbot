@@ -25,7 +25,7 @@ RULES:
 1. Use ONLY the provided evidence chunks. Do not add information from your training.
 2. When listing items (products, features, options), include ONLY what is explicitly named in the evidence. Never infer or add similar items.
 3. When the user asks about plans, products, or pricing: ALWAYS include (1) plan names, (2) prices/specs, and (3) the actual links (source_url or order_link from evidence). Format like: "Plan X: $Y – [link]". Do not give a generic answer without links.
-4. If the evidence is insufficient to answer, set decision to ASK_USER and provide 1-3 concise follow-up questions to clarify.
+4. If the evidence only partially answers the question, provide a bounded partial answer with decision set to PASS. Clearly separate confirmed details from unverified details. Use ASK_USER only when no safe bounded answer can be given.
 5. For high-risk topics (refunds, billing disputes, legal, abuse), if you cannot find clear policy evidence, set decision to ESCALATE.
 6. Always cite your sources. For each key claim, include a citation with chunk_id and source_url.
 7. If you cite a chunk, it MUST be in the evidence list.
@@ -42,6 +42,14 @@ OUTPUT SCHEMA (JSON):
 }
 
 Evidence chunks will be provided in the user message."""
+
+LANE_AWARE_PROMPT_SUFFIX = """
+
+INTERNAL ROUTING NOTES:
+- The runtime may route the answer as PASS_STRONG or PASS_WEAK.
+- PASS_WEAK is a bounded-answer lane. In JSON output, still use decision="PASS".
+- For PASS_WEAK style answers, state only confirmed details, explicitly name what is not verified, and avoid follow-up questions unless no safe partial answer exists.
+"""
 
 FALLBACK_INTENTS: list[tuple[str, str, str]] = [
     ("what_can_you_do", r"\b(what (can you|do you|does (this )?ai) do|bạn làm gì|ai làm gì|chức năng)\b", "I'm GreenCloud's AI support assistant. I can help with questions about our VPS (Windows, Linux KVM, macOS), dedicated servers, pricing, setup guides, and policies. Our docs are at https://green.cloud/docs. What would you like to know?"),
@@ -113,7 +121,9 @@ def get_system_prompt() -> str:
     """Return cached system prompt. Falls back to FALLBACK if cache empty."""
     prompt = _cache.get("system_prompt")
     if prompt is None:
-        return FALLBACK_SYSTEM_PROMPT
+        prompt = FALLBACK_SYSTEM_PROMPT
+    if "PASS_WEAK is a bounded-answer lane" not in prompt:
+        prompt = f"{prompt.rstrip()}\n{LANE_AWARE_PROMPT_SUFFIX}".strip()
     return prompt
 
 

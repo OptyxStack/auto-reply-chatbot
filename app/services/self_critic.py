@@ -8,6 +8,7 @@ from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.search.base import EvidenceChunk
 from app.services.llm_gateway import get_llm_gateway
+from app.services.model_router import get_model_for_task
 
 logger = get_logger(__name__)
 
@@ -61,7 +62,7 @@ Evidence preview:
 
     try:
         llm = get_llm_gateway()
-        model = getattr(get_settings(), "llm_model", "gpt-4o-mini")
+        model = get_model_for_task("self_critic")
         resp = await llm.chat(
             messages=[
                 {"role": "system", "content": SELF_CRITIC_PROMPT},

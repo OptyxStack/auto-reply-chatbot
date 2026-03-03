@@ -10,8 +10,9 @@ services:
       - "5173:5173"
     depends_on:
       - api
-    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0"]
+    command: ["sh", "-c", "/usr/local/bin/npm install && /usr/local/bin/npm run dev -- --host 0.0.0.0"]
     environment:
+      - CHOKIDAR_USEPOLLING=true
       - VITE_API_KEY=${API_KEY:-dev-key}
       - VITE_API_BASE=/v1
       - VITE_API_TARGET=http://api:8000
@@ -28,6 +29,7 @@ services:
       - "8000:8000"
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir /app/app
     environment:
+      - WATCHFILES_FORCE_POLLING=true
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@postgres:5432/support_ai
       - DATABASE_URL_SYNC=postgresql://postgres:postgres@postgres:5432/support_ai
@@ -39,6 +41,14 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - API_KEY=${API_KEY:-dev-key}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-admin-key}
+      # Hybrid normalizer profile: generic default.
+      # For legacy compatibility, override these in `.env` with:
+      # NORMALIZER_DOMAIN_TERMS=vps,dedicated,server,windows,linux,kvm,macos,pricing,plan,plans,nvme,bandwidth,ram,cpu,vds,epyc,xeon,product,order,account,refund
+      # NORMALIZER_QUERY_EXPANSION=true
+      # NORMALIZER_SLOTS_ENABLED=true
+      - NORMALIZER_DOMAIN_TERMS=${NORMALIZER_DOMAIN_TERMS:-}
+      - NORMALIZER_QUERY_EXPANSION=${NORMALIZER_QUERY_EXPANSION:-false}
+      - NORMALIZER_SLOTS_ENABLED=${NORMALIZER_SLOTS_ENABLED:-false}
       - OBJECT_STORAGE_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
@@ -57,6 +67,9 @@ services:
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - NORMALIZER_DOMAIN_TERMS=${NORMALIZER_DOMAIN_TERMS:-}
+      - NORMALIZER_QUERY_EXPANSION=${NORMALIZER_QUERY_EXPANSION:-false}
+      - NORMALIZER_SLOTS_ENABLED=${NORMALIZER_SLOTS_ENABLED:-false}
       - OBJECT_STORAGE_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}

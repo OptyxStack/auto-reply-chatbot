@@ -3,6 +3,7 @@ import { Routes, Route, Link, useLocation } from 'react-router-dom'
 import {
   MessageSquare,
   FileText,
+  FileType,
   BarChart3,
   Bot,
   Menu,
@@ -11,6 +12,7 @@ import {
   Ticket,
   Sparkles,
   Settings as SettingsIcon,
+  MessageCircle,
 } from 'lucide-react'
 import ConversationList from './pages/ConversationList'
 import ConversationDetail from './pages/ConversationDetail'
@@ -20,6 +22,8 @@ import Dashboard from './pages/Dashboard'
 import Crawler from './pages/Crawler'
 import TicketList from './pages/TicketList'
 import TicketDetail from './pages/TicketDetail'
+import IntentList from './pages/IntentList'
+import DocTypeList from './pages/DocTypeList'
 import Settings from './pages/Settings'
 
 const NAV_ITEMS = [
@@ -28,6 +32,8 @@ const NAV_ITEMS = [
   { to: '/documents', icon: FileText, label: 'Documents', match: ['/documents'] },
   { to: '/crawler', icon: Globe, label: 'Crawl', match: ['/crawler'] },
   { to: '/dashboard', icon: BarChart3, label: 'Dashboard', match: ['/dashboard'] },
+  { to: '/intents', icon: MessageCircle, label: 'Intents', match: ['/intents'] },
+  { to: '/doc-types', icon: FileType, label: 'Doc Types', match: ['/doc-types'] },
   { to: '/settings', icon: SettingsIcon, label: 'Settings', match: ['/settings'] },
 ]
 
@@ -164,6 +170,8 @@ function App() {
             <Route path="/documents/:id" element={<DocumentDetail />} />
             <Route path="/crawler" element={<Crawler />} />
             <Route path="/dashboard" element={<Dashboard />} />
+            <Route path="/intents" element={<IntentList />} />
+            <Route path="/doc-types" element={<DocTypeList />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </main>

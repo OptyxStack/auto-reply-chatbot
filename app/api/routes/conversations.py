@@ -224,6 +224,12 @@ async def send_message(
     # Generate answer (tickets are retrieved via vector/RAG like docs when relevant)
     answer_svc = AnswerService()
     trace_id = get_trace_id()
+    try:
+        from app.core.logging import get_logger
+        from app.services.flow_debug import _pipeline_log
+        _pipeline_log("api", "message_received", conversation_id=conversation_id, trace_id=trace_id)
+    except Exception:
+        pass
     output = await answer_svc.generate(
         query=content,
         conversation_history=conversation_history,
@@ -243,6 +249,12 @@ async def send_message(
     )
     db.add(assistant_msg)
     await db.flush()
+
+    try:
+        from app.services.flow_debug import _pipeline_log
+        _pipeline_log("api", "response_ready", decision=output.decision, confidence=output.confidence, trace_id=trace_id)
+    except Exception:
+        pass
 
     # Save citations
     for c in output.citations:

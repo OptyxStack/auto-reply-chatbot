@@ -24,12 +24,28 @@ def _checksum(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def _clean_html(html: str) -> str:
-    """Strip boilerplate and extract text from HTML."""
+def _clean_html(html: str, base_url: str | None = None) -> str:
+    """Strip boilerplate and extract text from HTML. Preserves links as text when base_url given."""
+    from urllib.parse import urljoin, urlparse
+
     soup = BeautifulSoup(html, "lxml")
-    # Remove script, style, nav, footer
     for tag in soup(["script", "style", "nav", "footer", "header"]):
         tag.decompose()
+
+    if base_url:
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "").strip()
+            if not href or href.startswith(("#", "javascript:", "mailto:")):
+                continue
+            try:
+                full_url = urljoin(base_url, href)
+                parsed = urlparse(full_url)
+                if parsed.scheme in ("http", "https"):
+                    link_text = a.get_text(strip=True) or full_url
+                    a.replace_with(f"{link_text} ({full_url})")
+            except Exception:
+                pass
+
     text = soup.get_text(separator="\n")
     text = unescape(text)
     text = re.sub(r"\n{3,}", "\n\n", text)
@@ -105,8 +121,9 @@ def _chunk_by_semantic_boundaries(
 def prepare_document(doc: dict[str, Any]) -> tuple[str, str, list[tuple[str, str]]]:
     """Clean and chunk a document. Returns (cleaned_content, raw_content, chunks)."""
     raw = doc.get("raw_text") or doc.get("raw_html") or doc.get("content", "")
+    base_url = doc.get("url") or doc.get("source_url")
     if doc.get("raw_html") or "<" in raw[:100]:
-        cleaned = _clean_html(raw)
+        cleaned = _clean_html(raw, base_url=base_url)
     else:
         cleaned = raw
 
@@ -174,6 +191,14 @@ class IngestionService:
         existing = result.scalars().first()
         if existing and existing.checksum == checksum:
             logger.info("ingest_skipped_unchanged", source_url=url)
+            # Content unchanged: skip re-chunk/re-embed but still update doc_type, title (e.g. from classifier)
+            existing.title = title
+            existing.doc_type = doc_type
+            existing.effective_date = effective_date
+            existing.doc_metadata = metadata
+            existing.source_file = source_file
+            existing.updated_at = datetime.utcnow()
+            await db_session.flush()
             return existing.id
 
         # Create or update document

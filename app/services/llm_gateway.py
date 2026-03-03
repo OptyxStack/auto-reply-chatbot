@@ -135,6 +135,13 @@ class OpenAIGateway(LLMGateway):
                     llm_cost_usd.labels(model=response.model).inc(estimate_cost(response.model, inp, out))
                 except Exception:
                     pass
+                try:
+                    from app.core.tracing import llm_usage_var
+                    acc = llm_usage_var.get()
+                    if acc is not None:
+                        acc.append({"model": response.model, "input_tokens": inp, "output_tokens": out})
+                except Exception:
+                    pass
                 return result
             except Exception as e:
                 last_error = e

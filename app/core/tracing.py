@@ -19,6 +19,9 @@ from app.core.logging import trace_id_var
 # Trace ID for request correlation
 request_trace_id_var: ContextVar[str | None] = ContextVar("request_trace_id", default=None)
 
+# LLM usage accumulator for per-message cost (list of {model, input_tokens, output_tokens})
+llm_usage_var: ContextVar[list | None] = ContextVar("llm_usage", default=None)
+
 
 def get_trace_id() -> str:
     """Get or create trace_id for current request."""

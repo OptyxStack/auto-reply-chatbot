@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { documents, admin, type Document, DOC_TYPES } from '../api/client'
+import { documents, admin, type Document, type DocType } from '../api/client'
 import {
   Plus,
   Trash2,
@@ -18,6 +18,7 @@ import {
   Upload,
   Globe,
   Sparkles,
+  RefreshCw,
 } from 'lucide-react'
 
 const DOC_TYPE_COLORS: Record<string, string> = {
@@ -44,7 +45,17 @@ export default function DocumentList() {
   const [ingestResult, setIngestResult] = useState<{ ok: number; skipped: number; error: number } | null>(null)
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showCrawlModal, setShowCrawlModal] = useState(false)
+  const [reCrawlAllLoading, setReCrawlAllLoading] = useState(false)
+  const [reCrawlAllResult, setReCrawlAllResult] = useState<{ total: number; updated: number; skipped: number; error: number; errors: string[] } | null>(null)
+  const [reCrawlId, setReCrawlId] = useState<string | null>(null)
+  const [docTypes, setDocTypes] = useState<DocType[]>([])
   const pageSize = 15
+
+  const docTypeOptions = docTypes
+
+  useEffect(() => {
+    admin.listDocTypes().then(setDocTypes).catch(() => {})
+  }, [])
 
   const load = async () => {
     setLoading(true)
@@ -74,6 +85,12 @@ export default function DocumentList() {
     return () => clearTimeout(t)
   }, [ingestResult])
 
+  useEffect(() => {
+    if (!reCrawlAllResult) return
+    const t = setTimeout(() => setReCrawlAllResult(null), 6000)
+    return () => clearTimeout(t)
+  }, [reCrawlAllResult])
+
   const handleDelete = async (id: string, e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -85,6 +102,39 @@ export default function DocumentList() {
       setError(e instanceof Error ? e.message : 'Failed to delete')
     }
   }
+
+  const handleReCrawlAll = async () => {
+    if (!confirm('Re-crawl all documents with http(s) URLs? This fetches latest content and re-ingests.')) return
+    setReCrawlAllLoading(true)
+    setError(null)
+    setReCrawlAllResult(null)
+    try {
+      const res = await documents.reCrawlAll()
+      setReCrawlAllResult({ total: res.total, updated: res.updated, skipped: res.skipped, error: res.error, errors: res.errors || [] })
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Re-crawl failed')
+    } finally {
+      setReCrawlAllLoading(false)
+    }
+  }
+
+  const handleReCrawl = async (id: string, e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setReCrawlId(id)
+    setError(null)
+    try {
+      await documents.reCrawl(id)
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Re-crawl failed')
+    } finally {
+      setReCrawlId(null)
+    }
+  }
+
+  const isCrawlable = (url: string) => url && (url.startsWith('http://') || url.startsWith('https://'))
 
   const handleIngestFromSource = async () => {
     if (!confirm('Ingest documents from source/ folder (custom_docs.json, sample_docs.json, sample_conversations.json, etc.)?')) return
@@ -103,104 +153,198 @@ export default function DocumentList() {
   }
 
   const totalPages = Math.ceil(total / pageSize)
+  const visibleChunks = items.reduce((sum, item) => sum + item.chunks_count, 0)
+  const crawlableCount = items.filter((item) => isCrawlable(item.source_url)).length
+  const hasActiveFilters = Boolean(filterDocType || filterQApplied)
+  const activeFilterCount = Number(Boolean(filterDocType)) + Number(Boolean(filterQApplied))
 
   return (
-    <div className="animate-slide-up">
-      <header className="flex justify-between items-start mb-8">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-white">Documents</h1>
-          <p className="text-sm text-zinc-500 mt-1.5">Knowledge base documents for AI retrieval</p>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <button
-            className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-            onClick={handleIngestFromSource}
-            disabled={ingesting}
-            title="Load from source/custom_docs.json, sample_docs.json, sample_conversations.json, etc."
-          >
-            {ingesting ? <Loader2 size={15} className="animate-spin-slow" /> : <Database size={15} />}
-            {ingesting ? 'Ingesting...' : 'Ingest from source'}
-          </button>
-          <button
-            className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
-            onClick={() => setShowUploadModal(true)}
-          >
-            <Upload size={15} />
-            Upload file
-          </button>
-          <button
-            className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
-            onClick={() => setShowCrawlModal(true)}
-            title="Crawl entire website and add all pages as documents"
-          >
-            <Globe size={15} />
-            Crawl website
-          </button>
-          <button
-            className="btn-primary inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium"
-            onClick={() => setShowCreateModal(true)}
-          >
-            <Plus size={16} />
-            Add document
-          </button>
+    <div className="space-y-6 animate-slide-up">
+      <header className="relative overflow-hidden rounded-[28px] border border-white/8 bg-[linear-gradient(135deg,rgba(12,20,33,0.95),rgba(10,14,24,0.92))] shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(6,182,212,0.16),transparent_36%),radial-gradient(circle_at_left,rgba(59,130,246,0.12),transparent_30%)]" />
+        <div className="relative p-6 lg:p-7">
+          <div className="flex flex-col gap-6 xl:flex-row xl:items-start xl:justify-between">
+            <div className="max-w-3xl">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/20 bg-cyan-400/8 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-300">
+                <Database size={12} />
+                Knowledge Base
+              </div>
+              <h1 className="mt-4 text-3xl font-semibold tracking-tight text-white sm:text-[2rem]">Document Library</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-zinc-400 sm:text-[15px]">
+                Organize retrieval documents, refresh live sources, and keep the knowledge base clean enough for accurate responses.
+              </p>
+            </div>
+
+            <div className="grid w-full gap-3 sm:grid-cols-2 xl:w-auto xl:min-w-[460px]">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 backdrop-blur-md">
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <span>Total documents</span>
+                  <FileText size={14} className="text-cyan-300" />
+                </div>
+                <div className="mt-3 text-3xl font-semibold tracking-tight text-white">{total.toLocaleString()}</div>
+                <div className="mt-1 text-xs text-zinc-500">Across all indexed sources</div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 backdrop-blur-md">
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <span>Visible on page</span>
+                  <Layers size={14} className="text-emerald-300" />
+                </div>
+                <div className="mt-3 text-3xl font-semibold tracking-tight text-white">{items.length}</div>
+                <div className="mt-1 text-xs text-zinc-500">{visibleChunks.toLocaleString()} chunks in current view</div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 backdrop-blur-md">
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <span>HTTP sources</span>
+                  <Globe size={14} className="text-blue-300" />
+                </div>
+                <div className="mt-3 text-3xl font-semibold tracking-tight text-white">{crawlableCount}</div>
+                <div className="mt-1 text-xs text-zinc-500">Available for re-crawl right now</div>
+              </div>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 backdrop-blur-md">
+                <div className="flex items-center justify-between text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  <span>Filters</span>
+                  <Filter size={14} className="text-amber-300" />
+                </div>
+                <div className="mt-3 text-3xl font-semibold tracking-tight text-white">{activeFilterCount}</div>
+                <div className="mt-1 text-xs text-zinc-500">{hasActiveFilters ? 'Custom view is active' : 'Showing all documents'}</div>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-white/[0.06] pt-5">
+            <div className="flex flex-wrap gap-2.5">
+              <button
+                className="btn-primary inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium"
+                onClick={() => setShowCreateModal(true)}
+              >
+                <Plus size={16} />
+                Add document
+              </button>
+              <button
+                className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
+                onClick={() => setShowUploadModal(true)}
+              >
+                <Upload size={15} />
+                Upload file
+              </button>
+              <button
+                className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium"
+                onClick={() => setShowCrawlModal(true)}
+                title="Crawl entire website and add all pages as documents"
+              >
+                <Globe size={15} />
+                Crawl website
+              </button>
+              <button
+                className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleIngestFromSource}
+                disabled={ingesting}
+                title="Load from source/custom_docs.json, sample_docs.json, sample_conversations.json, etc."
+              >
+                {ingesting ? <Loader2 size={15} className="animate-spin-slow" /> : <Database size={15} />}
+                {ingesting ? 'Ingesting...' : 'Ingest from source'}
+              </button>
+              <button
+                className="btn-ghost inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleReCrawlAll}
+                disabled={reCrawlAllLoading}
+                title="Re-crawl all documents with http(s) URLs"
+              >
+                {reCrawlAllLoading ? <Loader2 size={16} className="animate-spin-slow" /> : <RefreshCw size={16} />}
+                Re-crawl all ( Update Content)
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-2.5 mb-5">
-        <div className="relative">
-          <Filter size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
-          <select
-            value={filterDocType}
-            onChange={(e) => setFilterDocType(e.target.value)}
-            className="pl-9 pr-4 py-2.5 rounded-xl input-glass text-sm appearance-none min-w-[160px]"
-            aria-label="Filter by type"
-          >
-            <option value="">All types</option>
-            {DOC_TYPES.map((t) => (
-              <option key={t} value={t}>{t}</option>
-            ))}
-          </select>
+      <section className="glass rounded-[24px] border border-white/[0.06] p-4 sm:p-5">
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <div className="text-sm font-semibold text-white">Refine documents</div>
+              <div className="text-xs text-zinc-500">Filter by type or search by title and source URL.</div>
+            </div>
+            <div className="text-xs text-zinc-500">
+              {hasActiveFilters ? `${activeFilterCount} active filter${activeFilterCount > 1 ? 's' : ''}` : 'No active filters'}
+            </div>
+          </div>
+
+          <div className="grid gap-3 lg:grid-cols-[minmax(180px,220px)_minmax(260px,1fr)_auto_auto]">
+            <div className="relative">
+              <Filter size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
+              <select
+                value={filterDocType}
+                onChange={(e) => setFilterDocType(e.target.value)}
+                className="w-full min-w-0 appearance-none rounded-xl border border-white/[0.06] bg-white/[0.03] py-2.5 pl-9 pr-4 text-sm text-zinc-200"
+                aria-label="Filter by type"
+              >
+                <option value="">All types</option>
+                {docTypeOptions.map((t) => (
+                  <option key={t.key} value={t.key}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="relative">
+              <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
+              <input
+                type="search"
+                placeholder="Search title, source URL, or keyword"
+                value={filterQ}
+                onChange={(e) => setFilterQ(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && setFilterQApplied(filterQ.trim())}
+                className="w-full rounded-xl border border-white/[0.06] bg-white/[0.03] py-2.5 pl-9 pr-4 text-sm text-zinc-200 placeholder:text-zinc-600"
+                aria-label="Search"
+              />
+            </div>
+            <button
+              className="btn-ghost px-4 py-2.5 rounded-xl text-sm font-medium"
+              onClick={() => setFilterQApplied(filterQ.trim())}
+            >
+              Search
+            </button>
+            <button
+              className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                hasActiveFilters
+                  ? 'text-zinc-300 hover:bg-white/[0.05] hover:text-white'
+                  : 'text-zinc-600 cursor-not-allowed'
+              }`}
+              onClick={() => {
+                if (!hasActiveFilters) return
+                setFilterDocType('')
+                setFilterQ('')
+                setFilterQApplied('')
+              }}
+              disabled={!hasActiveFilters}
+            >
+              Clear
+            </button>
+          </div>
         </div>
-        <div className="relative flex-1 max-w-xs">
-          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-600 pointer-events-none" />
-          <input
-            type="search"
-            placeholder="Search title, URL..."
-            value={filterQ}
-            onChange={(e) => setFilterQ(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && setFilterQApplied(filterQ)}
-            className="w-full pl-9 pr-4 py-2.5 rounded-xl input-glass text-sm"
-            aria-label="Search"
-          />
-        </div>
-        <button
-          className="btn-ghost px-4 py-2.5 rounded-xl text-sm font-medium"
-          onClick={() => setFilterQApplied(filterQ)}
-        >
-          Search
-        </button>
-        {(filterDocType || filterQApplied) && (
-          <button
-            className="px-3 py-2.5 rounded-xl text-xs text-zinc-600 hover:text-white hover:bg-white/[0.05] transition-colors"
-            onClick={() => { setFilterDocType(''); setFilterQ(''); setFilterQApplied('') }}
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
+      </section>
 
       {error && (
-        <div className="flex items-center gap-2 p-3.5 rounded-xl mb-5 bg-danger/10 border border-danger/20 text-red-300 text-sm animate-fade-in">
+        <div className="flex items-center gap-2 rounded-2xl border border-danger/20 bg-danger/10 px-4 py-3.5 text-sm text-red-300 animate-fade-in">
           {error}
         </div>
       )}
       {ingestResult && (
-        <div className="flex items-center gap-2 p-3.5 rounded-xl mb-5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-300 text-sm animate-fade-in">
+        <div className="flex items-center gap-2 rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3.5 text-sm text-emerald-300 animate-fade-in">
           Ingest complete: {ingestResult.ok} added, {ingestResult.skipped} skipped, {ingestResult.error} errors
         </div>
       )}
+      {reCrawlAllResult && (
+        <div className="flex flex-col gap-1 rounded-2xl border border-cyan-500/20 bg-cyan-500/10 px-4 py-3.5 text-sm text-cyan-300 animate-fade-in">
+          <span>Re-crawl complete: {reCrawlAllResult.updated} updated, {reCrawlAllResult.skipped} unchanged, {reCrawlAllResult.error} errors</span>
+          {reCrawlAllResult.errors.length > 0 && (
+            <ul className="mt-1 list-disc pl-4 text-xs text-cyan-400/90">
+              {reCrawlAllResult.errors.slice(0, 5).map((err, i) => <li key={i}>{err}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
 
-      <div className="glass rounded-2xl overflow-hidden">
+      <div className="glass overflow-hidden rounded-[24px] border border-white/[0.06]">
         {loading ? (
           <div className="flex items-center justify-center gap-3 py-20 text-zinc-500">
             <Loader2 size={20} className="animate-spin-slow text-accent" />
@@ -208,14 +352,14 @@ export default function DocumentList() {
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center py-20 text-zinc-500">
-            <div className="w-16 h-16 rounded-2xl glass-accent flex items-center justify-center mb-5 glow-sm">
-              <FileText size={28} className="text-violet-400" />
+            <div className="mb-5 flex h-16 w-16 items-center justify-center rounded-2xl border border-cyan-500/15 bg-cyan-500/10">
+              <FileText size={28} className="text-cyan-300" />
             </div>
-            <p className="font-semibold text-zinc-300 mb-1.5">No documents found</p>
-            <p className="text-sm mb-5">
-              {filterDocType || filterQApplied ? 'Try adjusting your filters' : 'Add your first document to get started'}
+            <p className="mb-1.5 font-semibold text-zinc-200">No documents found</p>
+            <p className="mb-5 text-sm">
+              {hasActiveFilters ? 'Try broadening the filters or search query.' : 'Add your first document to start populating the library.'}
             </p>
-            {!filterDocType && !filterQApplied && (
+            {!hasActiveFilters && (
               <button
                 className="btn-primary inline-flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-medium"
                 onClick={() => setShowCreateModal(true)}
@@ -226,76 +370,116 @@ export default function DocumentList() {
             )}
           </div>
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.04]">
-                <th className="px-5 py-3.5 text-left text-zinc-500 font-medium text-xs uppercase tracking-wider">ID</th>
-                <th className="px-5 py-3.5 text-left text-zinc-500 font-medium text-xs uppercase tracking-wider">Title</th>
-                <th className="px-5 py-3.5 text-left text-zinc-500 font-medium text-xs uppercase tracking-wider">Type</th>
-                <th className="px-5 py-3.5 text-left text-zinc-500 font-medium text-xs uppercase tracking-wider">Chunks</th>
-                <th className="px-5 py-3.5 text-left text-zinc-500 font-medium text-xs uppercase tracking-wider">Updated</th>
-                <th className="px-5 py-3.5 text-right text-zinc-500 font-medium text-xs uppercase tracking-wider">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((d) => (
-                <tr
-                  key={d.id}
-                  className="border-b border-white/[0.03] last:border-b-0 hover:bg-white/[0.02] transition-colors duration-200 cursor-pointer group"
-                  onClick={() => navigate(`/documents/${d.id}`)}
-                >
-                  <td className="px-5 py-4">
-                    <code className="text-xs text-violet-400 bg-violet-500/10 px-2 py-1 rounded-lg font-mono">
-                      {d.id.slice(0, 8)}
-                    </code>
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className="text-zinc-200 font-medium">{d.title || '(Untitled)'}</span>
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg border capitalize ${DOC_TYPE_COLORS[d.doc_type] || DOC_TYPE_COLORS.other}`}>
-                      {d.doc_type}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4">
-                    <span className="inline-flex items-center gap-1.5 text-zinc-400">
-                      <Layers size={13} className="text-zinc-600" />
-                      {d.chunks_count}
-                    </span>
-                  </td>
-                  <td className="px-5 py-4 text-zinc-400">
-                    {new Date(d.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </td>
-                  <td className="px-5 py-4">
-                    <div className="flex items-center justify-end gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-200">
-                      <Link
-                        to={`/documents/${d.id}`}
-                        className="p-2 rounded-lg text-zinc-500 hover:text-white hover:bg-white/[0.06] transition-colors"
-                        onClick={(e) => e.stopPropagation()}
-                        title="View"
-                      >
-                        <ExternalLink size={14} />
-                      </Link>
-                      <button
-                        className="p-2 rounded-lg text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
-                        onClick={(e) => handleDelete(d.id, e)}
-                        title="Delete"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <>
+            <div className="flex flex-col gap-2 border-b border-white/[0.04] px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="text-sm font-medium text-zinc-200">Active inventory</div>
+                <div className="text-xs text-zinc-500">
+                  Showing {items.length} of {total.toLocaleString()} documents
+                </div>
+              </div>
+              <div className="text-xs text-zinc-500">
+                {hasActiveFilters ? `Filtered view across ${activeFilterCount} rule${activeFilterCount > 1 ? 's' : ''}` : 'Sorted by latest update'}
+              </div>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[940px] text-sm">
+                <thead>
+                  <tr className="border-b border-white/[0.04] bg-white/[0.015]">
+                    <th className="px-5 py-3.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500">ID</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500">Document</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500">Type</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500">Chunks</th>
+                    <th className="px-5 py-3.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500">Updated</th>
+                    <th className="px-5 py-3.5 text-right text-xs font-medium uppercase tracking-wider text-zinc-500">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((d) => (
+                    <tr
+                      key={d.id}
+                      className="cursor-pointer border-b border-white/[0.03] last:border-b-0 transition-colors duration-200 hover:bg-white/[0.02]"
+                      onClick={() => navigate(`/documents/${d.id}`)}
+                    >
+                      <td className="px-5 py-4 align-top">
+                        <code className="inline-flex rounded-lg bg-cyan-500/8 px-2.5 py-1 text-xs font-medium text-cyan-300 ring-1 ring-cyan-500/10">
+                          {d.id.slice(0, 8)}
+                        </code>
+                      </td>
+                      <td className="px-5 py-4 align-top">
+                        <div className="space-y-1.5">
+                          <div className="font-medium text-zinc-100">{d.title || '(Untitled)'}</div>
+                          <div className="max-w-[420px] truncate text-xs text-zinc-500">
+                            {d.source_url || 'No source URL provided'}
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 align-top">
+                        <span className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-medium capitalize ${DOC_TYPE_COLORS[d.doc_type] || DOC_TYPE_COLORS.other}`}>
+                          {d.doc_type}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 align-top">
+                        <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                          <Layers size={13} className="text-zinc-600" />
+                          {d.chunks_count.toLocaleString()}
+                        </span>
+                      </td>
+                      <td className="px-5 py-4 align-top text-zinc-400">
+                        <div>{new Date(d.updated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</div>
+                        <div className="mt-1 text-xs text-zinc-600">
+                          {new Date(d.updated_at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 align-top">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {isCrawlable(d.source_url) && (
+                            <button
+                              className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-cyan-500/10 hover:text-cyan-300 disabled:opacity-50"
+                              onClick={(e) => handleReCrawl(d.id, e)}
+                              disabled={reCrawlId === d.id}
+                              title="Re-crawl latest content"
+                            >
+                              {reCrawlId === d.id ? <Loader2 size={14} className="animate-spin-slow" /> : <RefreshCw size={14} />}
+                            </button>
+                          )}
+                          <Link
+                            to={`/documents/${d.id}`}
+                            className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-white"
+                            onClick={(e) => e.stopPropagation()}
+                            title="View"
+                          >
+                            <ExternalLink size={14} />
+                          </Link>
+                          <button
+                            className="rounded-lg p-2 text-zinc-500 transition-colors hover:bg-red-500/10 hover:text-red-400"
+                            onClick={(e) => handleDelete(d.id, e)}
+                            title="Delete"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 
       {totalPages > 1 && (
-        <div className="flex items-center justify-between mt-5">
-          <span className="text-sm text-zinc-500">
+        <div className="flex items-center justify-between">
+          <span className="hidden text-sm text-zinc-500" aria-hidden="true">
             {total} total · page {page} of {totalPages}
+          </span>
+          <span className="hidden text-sm text-zinc-500" aria-hidden="true">
+            {total.toLocaleString()} total · page {page} of {totalPages}
+          </span>
+          <span className="text-sm text-zinc-500">
+            {total.toLocaleString()} total | page {page} of {totalPages}
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -311,11 +495,11 @@ export default function DocumentList() {
               return (
                 <button
                   key={p}
-                  className={`w-9 h-9 rounded-xl text-sm font-medium transition-all duration-200
-                    ${p === page
+                  className={`w-9 h-9 rounded-xl text-sm font-medium transition-all duration-200 ${
+                    p === page
                       ? 'btn-primary'
                       : 'text-zinc-500 hover:text-white hover:bg-white/[0.05]'
-                    }`}
+                  }`}
                   onClick={() => setPage(p)}
                 >
                   {p}
@@ -335,6 +519,7 @@ export default function DocumentList() {
 
       {showCreateModal && (
         <CreateDocumentModal
+          docTypeOptions={docTypeOptions}
           onSuccess={(doc) => {
             setShowCreateModal(false)
             navigate(`/documents/${doc.id}`)
@@ -344,6 +529,7 @@ export default function DocumentList() {
       )}
       {showUploadModal && (
         <UploadFileModal
+          docTypeOptions={docTypeOptions}
           onSuccess={(doc) => {
             setShowUploadModal(false)
             load()
@@ -366,9 +552,11 @@ export default function DocumentList() {
 }
 
 function CreateDocumentModal({
+  docTypeOptions,
   onSuccess,
   onCancel,
 }: {
+  docTypeOptions: Array<{ key: string; label: string }>
   onSuccess: (doc: Document) => void
   onCancel: () => void
 }) {
@@ -461,7 +649,7 @@ function CreateDocumentModal({
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">Type</label>
             <select value={docType} onChange={(e) => setDocType(e.target.value)} className="w-full px-4 py-2.5 rounded-xl input-glass text-sm" aria-label="Type">
-              {DOC_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
+              {docTypeOptions.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
             </select>
           </div>
           <div>
@@ -486,9 +674,11 @@ function CreateDocumentModal({
 }
 
 function UploadFileModal({
+  docTypeOptions,
   onSuccess,
   onCancel,
 }: {
+  docTypeOptions: Array<{ key: string; label: string }>
   onSuccess: (doc: Document) => void
   onCancel: () => void
 }) {
@@ -560,7 +750,7 @@ function UploadFileModal({
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">Type</label>
             <select value={docType} onChange={(e) => setDocType(e.target.value)} className="w-full px-4 py-2.5 rounded-xl input-glass text-sm" aria-label="Type">
-              {DOC_TYPES.map((t) => (<option key={t} value={t}>{t}</option>))}
+              {docTypeOptions.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
             </select>
           </div>
         </div>
@@ -591,6 +781,7 @@ function CrawlWebsiteModal({
   const [maxPages, setMaxPages] = useState(50)
   const [maxDepth, setMaxDepth] = useState(3)
   const [ingest, setIngest] = useState(true)
+  const [excludePrefixes, setExcludePrefixes] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [crawling, setCrawling] = useState(false)
   const [result, setResult] = useState<{ pages_crawled: number; pages_ingested: number; pages: Array<{ url: string; title: string }> } | null>(null)
@@ -604,11 +795,16 @@ function CrawlWebsiteModal({
     setError(null)
     setResult(null)
     try {
+      const prefixes = excludePrefixes
+        .split('\n')
+        .map((p) => p.trim())
+        .filter(Boolean)
       const res = await documents.crawlWebsite({
         url: url.trim(),
         max_pages: maxPages,
         max_depth: maxDepth,
         ingest,
+        exclude_prefixes: prefixes.length > 0 ? prefixes : undefined,
       })
       setResult({
         pages_crawled: res.pages_crawled,
@@ -639,6 +835,19 @@ function CrawlWebsiteModal({
           <div>
             <label className="block text-sm font-medium text-zinc-400 mb-2">Website URL <span className="text-danger">*</span></label>
             <input type="url" value={url} onChange={(e) => { setUrl(e.target.value); setError(null) }} placeholder="https://example.com" className="w-full px-4 py-2.5 rounded-xl input-glass text-sm" disabled={crawling} />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-zinc-400 mb-2">Exclude URL prefixes</label>
+            <textarea
+              value={excludePrefixes}
+              onChange={(e) => setExcludePrefixes(e.target.value)}
+              placeholder={'https://example.com/admin\nhttps://example.com/private'}
+              rows={2}
+              className="w-full px-4 py-2.5 rounded-xl input-glass text-sm font-mono resize-y"
+              disabled={crawling}
+              aria-label="Exclude prefixes"
+            />
+            <p className="mt-1.5 text-xs text-zinc-500">One prefix per line. URLs starting with any prefix will be skipped.</p>
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>

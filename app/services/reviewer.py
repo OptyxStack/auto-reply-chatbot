@@ -1,12 +1,15 @@
-"""Reviewer gate: rule-based quality checks before returning answers."""
+"""Reviewer gate: rule-based quality checks. Workstream 5: claim-level trim + lane downgrade."""
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.search.base import EvidenceChunk
+
+from app.services.claim_parser import segment_claims, is_risky_claim, trim_unsupported_claims
 
 logger = get_logger(__name__)
 
@@ -16,6 +19,8 @@ class ReviewerStatus(str, Enum):
     ASK_USER = "ASK_USER"
     RETRIEVE_MORE = "RETRIEVE_MORE"
     ESCALATE = "ESCALATE"
+    TRIM_UNSUPPORTED = "TRIM_UNSUPPORTED"
+    DOWNGRADE_LANE = "DOWNGRADE_LANE"
 
 
 @dataclass
@@ -26,6 +31,11 @@ class ReviewerResult:
     reasons: list[str]
     suggested_queries: list[str]
     missing_fields: list[str]
+    trimmed_answer: str | None = None
+    final_lane: str | None = None
+    unsupported_claims: list[str] = field(default_factory=list)
+    weakly_supported_claims: list[str] = field(default_factory=list)
+    claim_to_citation_map: dict[str, list[str]] = field(default_factory=dict)
 
 
 # High-risk query patterns
@@ -91,6 +101,112 @@ def _has_uncited_policy_claims(answer: str) -> bool:
     return False
 
 
+def _is_bounded_answer(
+    answer: str,
+    answer_policy: str,
+    lane: str | None,
+) -> bool:
+    """Detect bounded-answer mode from lane, policy, or explicit wording."""
+    if answer_policy == "bounded" or lane == "PASS_WEAK":
+        return True
+
+    lowered = answer.lower()
+    bounded_markers = (
+        "not verified",
+        "not confirmed",
+        "unverified",
+        "i only confirmed",
+        "available evidence",
+        "could not verify",
+    )
+    return any(marker in lowered for marker in bounded_markers)
+
+
+def _build_claim_to_citation_map(
+    answer: str,
+    citations: list[dict],
+    evidence: list[EvidenceChunk],
+) -> tuple[dict[str, list[str]], list[str], list[str]]:
+    """Build claim_to_citation_map, unsupported_claims, weakly_supported_claims.
+
+    Heuristic: risky claims need strong citation support. With few citations
+    we cannot attribute them to specific claims, so risky claims are unsupported.
+    """
+    claim_to_citation: dict[str, list[str]] = {}
+    unsupported: list[str] = []
+    weakly: list[str] = []
+    cited_ids = {c.get("chunk_id") for c in citations if c.get("chunk_id")}
+    evidence_ids = {e.chunk_id for e in evidence}
+    has_valid_citations = bool(cited_ids & evidence_ids)
+
+    claims = segment_claims(answer)
+    for c in claims:
+        claim_to_citation[c.text] = list(cited_ids & evidence_ids)
+        if is_risky_claim(c.text):
+            if not has_valid_citations:
+                unsupported.append(c.text)
+            elif len(citations) < 2:
+                unsupported.append(c.text)
+            else:
+                weakly.append(c.text)
+        else:
+            if not has_valid_citations:
+                weakly.append(c.text)
+
+    return claim_to_citation, unsupported, weakly
+
+
+def _try_trim_or_downgrade(
+    answer: str,
+    citations: list[dict],
+    evidence: list[EvidenceChunk],
+    failure_reason: str,
+    is_bounded: bool,
+) -> tuple[ReviewerStatus | None, str | None, list[str], list[str], dict[str, list[str]]]:
+    """Try trim or downgrade instead of ASK_USER. Returns (status, trimmed_answer, unsupported, weakly, claim_map)."""
+    if not getattr(get_settings(), "claim_level_review_enabled", True):
+        return None, None, [], [], {}
+
+    claim_to_citation, unsupported, weakly = _build_claim_to_citation_map(
+        answer, citations, evidence
+    )
+    has_valid_citations = bool(citations) and any(
+        c.get("chunk_id") in {e.chunk_id for e in evidence} for c in citations
+    )
+
+    if unsupported and has_valid_citations:
+        unsupported_indices = [
+            i for i, c in enumerate(segment_claims(answer))
+            if c.text in unsupported
+        ]
+        trimmed = trim_unsupported_claims(answer, unsupported_indices)
+        if trimmed and len(trimmed) >= 30:
+            return (
+                ReviewerStatus.TRIM_UNSUPPORTED,
+                trimmed,
+                unsupported,
+                weakly,
+                claim_to_citation,
+            )
+
+    soft_failures = (
+        "insufficient citations",
+        "low citation coverage",
+        "numbers",
+        "policy",
+    )
+    if has_valid_citations and is_bounded and any(s in failure_reason.lower() for s in soft_failures):
+        return (
+            ReviewerStatus.DOWNGRADE_LANE,
+            None,
+            unsupported,
+            weakly,
+            claim_to_citation,
+        )
+
+    return None, None, unsupported, weakly, claim_to_citation
+
+
 class ReviewerGate:
     """Rule-based reviewer gate."""
 
@@ -114,11 +230,14 @@ class ReviewerGate:
         confidence: float,
         retrieval_attempt: int = 1,
         max_attempts: int = 2,
+        answer_policy: str = "direct",
+        lane: str | None = None,
     ) -> ReviewerResult:
         """Run reviewer checks. Returns status and reasons."""
         reasons: list[str] = []
         suggested_queries: list[str] = []
         missing_fields: list[str] = []
+        is_bounded = _is_bounded_answer(answer, answer_policy, lane)
 
         # 1. PASS decision checks
         if decision == "PASS":
@@ -145,8 +264,23 @@ class ReviewerGate:
                     )
 
             # Numbers/prices without citation
-            if _has_uncited_numbers(answer) and len(citations) < 2:
+            if _has_uncited_numbers(answer) and len(citations) < 2 and not is_bounded:
                 reasons.append("Answer contains numbers/prices but insufficient citations")
+                alt_status, trimmed, u, w, cm = _try_trim_or_downgrade(
+                    answer, citations, evidence, "numbers", is_bounded
+                )
+                if alt_status:
+                    return ReviewerResult(
+                        status=alt_status,
+                        reasons=reasons,
+                        suggested_queries=[],
+                        missing_fields=[],
+                        trimmed_answer=trimmed,
+                        final_lane="PASS_WEAK" if alt_status == ReviewerStatus.DOWNGRADE_LANE else None,
+                        unsupported_claims=u,
+                        weakly_supported_claims=w,
+                        claim_to_citation_map=cm,
+                    )
                 return ReviewerResult(
                     status=ReviewerStatus.RETRIEVE_MORE,
                     reasons=reasons,
@@ -155,8 +289,28 @@ class ReviewerGate:
                 )
 
             # Policy claims without citation
-            if _has_uncited_policy_claims(answer) and len(citations) < 2:
+            if (
+                _has_uncited_policy_claims(answer)
+                and len(citations) < 2
+                and not _has_policy_citation(citations, evidence)
+                and not is_bounded
+            ):
                 reasons.append("Answer contains policy-like claims but insufficient citations")
+                alt_status, trimmed, u, w, cm = _try_trim_or_downgrade(
+                    answer, citations, evidence, "policy", is_bounded
+                )
+                if alt_status:
+                    return ReviewerResult(
+                        status=alt_status,
+                        reasons=reasons,
+                        suggested_queries=[],
+                        missing_fields=[],
+                        trimmed_answer=trimmed,
+                        final_lane="PASS_WEAK" if alt_status == ReviewerStatus.DOWNGRADE_LANE else None,
+                        unsupported_claims=u,
+                        weakly_supported_claims=w,
+                        claim_to_citation_map=cm,
+                    )
                 return ReviewerResult(
                     status=ReviewerStatus.RETRIEVE_MORE,
                     reasons=reasons,
@@ -177,8 +331,23 @@ class ReviewerGate:
 
             # Citation coverage
             cov = _citation_coverage(answer, citations)
-            if cov < self.min_citation_coverage and len(citations) < 2:
+            if cov < self.min_citation_coverage and len(citations) < 2 and not is_bounded:
                 reasons.append(f"Low citation coverage ({cov:.2f})")
+                alt_status, trimmed, u, w, cm = _try_trim_or_downgrade(
+                    answer, citations, evidence, "low citation coverage", is_bounded
+                )
+                if alt_status:
+                    return ReviewerResult(
+                        status=alt_status,
+                        reasons=reasons,
+                        suggested_queries=[],
+                        missing_fields=[],
+                        trimmed_answer=trimmed,
+                        final_lane="PASS_WEAK" if alt_status == ReviewerStatus.DOWNGRADE_LANE else None,
+                        unsupported_claims=u,
+                        weakly_supported_claims=w,
+                        claim_to_citation_map=cm,
+                    )
                 return ReviewerResult(
                     status=ReviewerStatus.RETRIEVE_MORE,
                     reasons=reasons,

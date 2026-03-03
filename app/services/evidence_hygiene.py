@@ -43,9 +43,12 @@ URL_PATTERN = re.compile(
     re.I,
 )
 
-# Transaction link paths (order/store/checkout/cart)
+# Transaction link paths + product pages (order/store, billing, dedicated, proxies)
 TRANSACTION_PATH_PATTERN = re.compile(
-    r"/(?:order|store|checkout|cart|buy|purchase|subscribe)/?",
+    r"/(?:order|store|checkout|cart|buy|purchase|subscribe|billing)/?|"
+    r"/(?:dedicated-servers|proxies|semi-dedicated|vps)/?|"
+    r"(?:dedicated-servers|proxies|semi-dedicated|-vps|vps|billing)\.(?:php|html?)|"
+    r"order_link|order\s*link",
     re.I,
 )
 
