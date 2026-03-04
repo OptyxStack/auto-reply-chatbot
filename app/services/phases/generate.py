@@ -48,6 +48,8 @@ async def execute_generate(
     model = orchestrator.get_model_for_query(ctx.query)
     _pipeline_log("generate", "start", model=model, evidence_chunks=len(ctx.evidence), trace_id=ctx.trace_id)
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("generate")
         llm_resp = await llm.chat(
             messages=messages,
             temperature=settings.llm_temperature,
@@ -86,6 +88,7 @@ async def execute_generate(
                 feedback = f"\n\nPrevious attempt had issues: {', '.join(critique_result.issues[:2])}. Fix: {critique_result.suggested_fix}"
                 messages[-1]["content"] = messages[-1]["content"] + feedback
                 try:
+                    current_llm_task_var.set("generate_regenerate")
                     llm_resp = await llm.chat(
                         messages=messages,
                         temperature=settings.llm_temperature,

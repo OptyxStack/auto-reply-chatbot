@@ -88,11 +88,13 @@ def _build_escalate_response() -> str:
 
 def _resolve_hard_requirements(
     query_spec: QuerySpec | None,
+    required_evidence: list[str],
 ) -> list[str]:
     """Resolve the must-have evidence list for router decisions."""
     if query_spec and getattr(query_spec, "hard_requirements", None):
         return list(dict.fromkeys(query_spec.hard_requirements or []))
-    return []
+    # Fallback: required_evidence as hard when normalizer didn't set hard_requirements
+    return list(dict.fromkeys(required_evidence or []))
 
 
 def _can_offer_weak_pass(
@@ -124,7 +126,7 @@ def _can_offer_weak_pass(
     if query_spec and getattr(query_spec, "answer_mode_hint", "strong") == "ask_user":
         return False
 
-    hard_requirements = _resolve_hard_requirements(query_spec)
+    hard_requirements = _resolve_hard_requirements(query_spec, required_evidence)
     if not hard_requirements:
         return False
 
@@ -241,10 +243,12 @@ Output JSON only:
 PASS when:
 - Greetings, chitchat, or questions that don't need documentation (hi, hello, hey, hiii, thanks, ok, bye). We can answer without evidence.
 - We have enough evidence to give a useful (possibly cautious) answer.
+- We have PARTIAL evidence that can partially answer (e.g. some policy language, approximate pricing, related how-to). Prefer PASS with bounded answer over ASK_USER when evidence has relevant content.
 
 ASK_USER when:
-- Evidence is too weak AND the query requires specific documentation (pricing, policy, how-to).
-- Query needs clarification (ambiguous referent)."""
+- Evidence is truly irrelevant or empty.
+- Query needs clarification (ambiguous referent).
+- High-risk query (refund dispute, legal) with zero relevant evidence."""
 
 
 async def route_hybrid(
@@ -271,8 +275,10 @@ async def route_hybrid(
         return dr
 
     try:
+        from app.core.tracing import current_llm_task_var
         from app.services.model_router import get_model_for_task
 
+        current_llm_task_var.set("decision_router")
         llm = get_llm_gateway()
         model = get_model_for_task("decision_router")
         qr = quality_report or QualityReport(0.0, {}, [], None, None)

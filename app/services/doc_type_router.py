@@ -41,6 +41,8 @@ Rules:
 """
 
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("doc_type_router")
         llm = get_llm_gateway()
         model = get_model_for_task("doc_type_classifier")
         resp = await llm.chat(

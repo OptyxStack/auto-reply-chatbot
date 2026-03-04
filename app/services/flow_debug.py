@@ -47,6 +47,7 @@ def build_flow_debug(
     llm_tokens: dict[str, int] | None = None,
     cost_usd: float | None = None,
     llm_usage_breakdown: list[dict] | None = None,
+    llm_call_log: list[dict] | None = None,
     attempt: int = 1,
     reviewer_reasons: list[str] | None = None,
     max_attempts_reached: bool = False,
@@ -122,6 +123,8 @@ def build_flow_debug(
         debug["cost_usd"] = round(cost_usd, 6)
     if llm_usage_breakdown:
         debug["llm_usage_breakdown"] = llm_usage_breakdown
+    if llm_call_log:
+        debug["llm_call_log"] = llm_call_log
     if reviewer_reasons:
         debug["reviewer_reasons"] = reviewer_reasons
     if max_attempts_reached:

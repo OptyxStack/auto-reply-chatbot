@@ -22,6 +22,12 @@ request_trace_id_var: ContextVar[str | None] = ContextVar("request_trace_id", de
 # LLM usage accumulator for per-message cost (list of {model, input_tokens, output_tokens})
 llm_usage_var: ContextVar[list | None] = ContextVar("llm_usage", default=None)
 
+# LLM call log for debug: list of {task, messages, response_content, model, input_tokens, output_tokens, cost_usd}
+llm_call_log_var: ContextVar[list | None] = ContextVar("llm_call_log", default=None)
+
+# Current LLM task (set by caller before chat, e.g. "normalizer", "evidence_quality")
+current_llm_task_var: ContextVar[str | None] = ContextVar("current_llm_task", default=None)
+
 
 def get_trace_id() -> str:
     """Get or create trace_id for current request."""

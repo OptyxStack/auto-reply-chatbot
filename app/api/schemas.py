@@ -253,6 +253,8 @@ class ArchiConfigResponse(BaseModel):
     decision_router_use_llm: bool
     evidence_evaluator_enabled: bool
     evidence_quality_use_llm: bool = True
+    evidence_quality_llm_v2: bool = False
+    debug_llm_calls: bool = False
     self_critic_enabled: bool
     final_polish_enabled: bool
     doc_type_classifier_enabled: bool = False
@@ -268,6 +270,8 @@ class ArchiConfigUpdateRequest(BaseModel):
     decision_router_use_llm: bool | None = None
     evidence_evaluator_enabled: bool | None = None
     evidence_quality_use_llm: bool | None = None
+    evidence_quality_llm_v2: bool | None = None
+    debug_llm_calls: bool | None = None
     self_critic_enabled: bool | None = None
     final_polish_enabled: bool | None = None
     doc_type_classifier_enabled: bool | None = None

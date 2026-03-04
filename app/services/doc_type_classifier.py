@@ -39,6 +39,8 @@ async def classify_doc_type(url: str, title: str, content: str) -> str:
     user_content = f"URL: {url}\nTitle: {title}\n\nContent:\n{content_preview}"
 
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("doc_type_classifier")
         llm = get_llm_gateway()
         model = get_model_for_task("doc_type_classifier")
         prompt = _build_classifier_prompt()

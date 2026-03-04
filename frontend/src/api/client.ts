@@ -225,6 +225,8 @@ export interface ArchiConfig {
   decision_router_use_llm: boolean
   evidence_evaluator_enabled: boolean
   evidence_quality_use_llm?: boolean
+  evidence_quality_llm_v2?: boolean
+  debug_llm_calls?: boolean
   self_critic_enabled: boolean
   final_polish_enabled: boolean
   doc_type_classifier_enabled: boolean
@@ -238,6 +240,8 @@ export interface ArchiConfigUpdate {
   decision_router_use_llm?: boolean
   evidence_evaluator_enabled?: boolean
   evidence_quality_use_llm?: boolean
+  evidence_quality_llm_v2?: boolean
+  debug_llm_calls?: boolean
   self_critic_enabled?: boolean
   final_polish_enabled?: boolean
   doc_type_classifier_enabled?: boolean
@@ -459,6 +463,16 @@ export interface FlowDebug {
   quality_report?: { hard_requirement_coverage?: Record<string, boolean>; [k: string]: unknown }
   /** Explainability: claim → citation chunk_ids */
   claim_to_citation_map?: Record<string, string[]>
+  /** Debug: full LLM prompts and responses per task (normalizer, evidence_quality, generate, etc.) */
+  llm_call_log?: {
+    task: string
+    messages: { role: string; content: string }[]
+    response_content: string
+    model: string
+    input_tokens: number
+    output_tokens: number
+    cost_usd: number
+  }[]
 }
 
 export interface Message {

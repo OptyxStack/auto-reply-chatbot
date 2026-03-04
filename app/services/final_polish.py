@@ -30,6 +30,8 @@ async def polish(answer: str) -> str | None:
             final_polish_total.inc()
         except Exception:
             pass
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("final_polish")
         llm = get_llm_gateway()
         model = get_model_for_task("final_polish")
         resp = await llm.chat(

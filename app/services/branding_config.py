@@ -18,8 +18,8 @@ from app.db.models import AppConfig, Intent
 
 logger = get_logger(__name__)
 
-# Fallback when DB is empty or unavailable (matches original hardcoded values)
-FALLBACK_SYSTEM_PROMPT = """You are GreenCloud's support assistant. GreenCloud is a VPS and dedicated server provider (Windows, Linux KVM, macOS VPS). You must ONLY use the provided evidence to answer. Never guess or make up information.
+# Fallback when DB is empty or unavailable (generic, deployer customizes via Admin API)
+FALLBACK_SYSTEM_PROMPT = """You are a support assistant. You must ONLY use the provided evidence to answer. Never guess or make up information.
 
 RULES:
 1. Use ONLY the provided evidence chunks. Do not add information from your training.
@@ -51,14 +51,19 @@ INTERNAL ROUTING NOTES:
 - For PASS_WEAK style answers, state only confirmed details, explicitly name what is not verified, and avoid follow-up questions unless no safe partial answer exists.
 """
 
-FALLBACK_INTENTS: list[tuple[str, str, str]] = [
-    ("what_can_you_do", r"\b(what (can you|do you|does (this )?ai) do|bạn làm gì|ai làm gì|chức năng)\b", "I'm GreenCloud's AI support assistant. I can help with questions about our VPS (Windows, Linux KVM, macOS), dedicated servers, pricing, setup guides, and policies. Our docs are at https://green.cloud/docs. What would you like to know?"),
-    ("who_are_you", r"\b(who are you|bạn là ai|ai là gì)\b", "I'm GreenCloud's AI support assistant. GreenCloud is a leading VPS and dedicated server provider (founded 2013), offering Windows VPS, KVM Linux VPS, macOS VPS, and bare-metal servers. I answer questions using our documentation at https://green.cloud/docs."),
-    ("who_am_i", r"\b(who am i|tôi là ai|mình là ai)\b", "I don't have access to your GreenCloud account details. For billing, account info, or service management, please log in at https://greencloudvps.com/billing or contact our 24/7 support (average response: 9 minutes)."),
-    ("about_greencloud", r"\b(what is greencloud|about greencloud|greencloud là gì|giới thiệu greencloud)\b", "GreenCloud is an Infrastructure as a Service provider founded in 2013. We offer: Windows VPS (from $8/mo), KVM Linux VPS (from $6/mo), macOS VPS (from $22/mo), and dedicated servers (from $110/mo). 99.99% uptime, 24/7 in-house support (9-min avg response), 30 locations across 4 continents. Docs: https://green.cloud/docs"),
-    ("refund_policy", r"\b(do you have|do u have|what(?:'s| is)|tell me about)\s+(?:a |your? )?refund\s*policy\b|\brefund\s*policy\??\s*$|chính sách hoàn tiền", "Yes. GreenCloud has a refund policy for the first VPS of new (\"fresh\") clients: if you're not happy with the service, you may cancel and request a refund within the first 7 days of purchase. Special discounted plans are excluded from the refund policy. For the full explanation and additional conditions, refer to the Terms of Service."),
-    ("hello", r"^(hi|hello|hey|chào|xin chào)\s*!?$", "Hello! Welcome to GreenCloud support. I can help with VPS, dedicated servers, pricing, or how-to guides. What do you need?"),
-]
+def _get_fallback_intents() -> list[tuple[str, str, str]]:
+    """Generic fallback intents. Uses APP_NAME from config when set. Customize via Admin API."""
+    app_name = get_settings().app_name.strip()
+    prefix = f"{app_name}'s " if app_name else ""
+    welcome = f"Welcome to {app_name} support. " if app_name else "Welcome. "
+    return [
+        ("what_can_you_do", r"\b(what (can you|do you|does (this )?ai) do|bạn làm gì|ai làm gì|chức năng)\b", f"I'm {prefix}AI support assistant. I can help with questions about products, policies, and setup guides. What would you like to know?"),
+        ("who_are_you", r"\b(who are you|bạn là ai|ai là gì)\b", f"I'm {prefix}AI support assistant. I answer questions using the provided documentation. How can I help?"),
+        ("who_am_i", r"\b(who am i|tôi là ai|mình là ai)\b", "I don't have access to your account details. For billing or account management, please log in to your account or contact support."),
+        ("about", r"\b(what is|about|who are you|giới thiệu)\s+(?:this (?:company|service)|us|your (?:company|service))\b", f"I'm {prefix}AI support assistant. I help answer questions using our documentation. What would you like to know?"),
+        ("refund_policy", r"\b(do you have|do u have|what(?:'s| is)|tell me about)\s+(?:a |your? )?refund\s*policy\b|\brefund\s*policy\??\s*$|chính sách hoàn tiền", "Please refer to our Terms of Service for the refund policy. I can search our docs for specific details if you have a question."),
+        ("hello", r"^(hi|hello|hey|chào|xin chào)\s*!?$", f"Hello! {welcome}How can I help you today?"),
+    ]
 
 
 @dataclass
@@ -100,10 +105,10 @@ async def _load_from_db(session: AsyncSession) -> tuple[str, list[tuple[str, str
         )
         intents = [(r.key, r.patterns, r.answer) for r in result.all()]
         if not intents:
-            intents = FALLBACK_INTENTS
+            intents = _get_fallback_intents()
     except Exception as e:
         logger.warning("branding_config_load_failed", error=str(e))
-        intents = FALLBACK_INTENTS
+        intents = _get_fallback_intents()
 
     return prompt, intents
 
@@ -131,7 +136,7 @@ def get_intents() -> list[tuple[str, str, str]]:
     """Return cached intents as (key, patterns, answer). Falls back if cache empty."""
     intents = _cache.get("intents")
     if intents is None:
-        return FALLBACK_INTENTS
+        return _get_fallback_intents()
     return intents
 
 

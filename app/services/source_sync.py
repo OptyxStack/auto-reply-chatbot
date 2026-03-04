@@ -35,11 +35,14 @@ def doc_type_source_file(doc_type: str) -> str:
 
 _FILE_FORMATS: dict[str, dict[str, Any]] = {
     "sample_docs.json":                    {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
-    "green_cloud_docs_full.json":          {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
+    "docs_full.json":                      {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
+    "docs_knowledge.json":                 {"list_key": "articles", "url_field": "url", "title_field": "title", "text_field": "snippet"},
+    "plans_advanced.json":                 {"list_key": "plans",    "url_field": None,  "title_field": "plan_name", "text_field": None},
+    "plans_additional.json":               {"list_key": "plans",    "url_field": None,  "title_field": "plan_name", "text_field": None},
+    "pricing.json":                        {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
+    "other.json":                          {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
+    "howto.json":                          {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
     "greencloudvps_terms_of_service.json": {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
-    "green_cloud_docs_knowledge.json":     {"list_key": "articles", "url_field": "url", "title_field": "title", "text_field": "snippet"},
-    "greencloudvps_advanced_data.json":    {"list_key": "plans",    "url_field": None,  "title_field": "plan_name", "text_field": None},
-    "greencloudvps_additional_plans.json": {"list_key": "plans",    "url_field": None,  "title_field": "plan_name", "text_field": None},
     CUSTOM_DOCS_FILE:                      {"list_key": "pages",    "url_field": "url", "title_field": "title", "text_field": "text"},
 }
 

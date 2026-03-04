@@ -230,6 +230,11 @@ curl -X POST http://localhost:8000/v1/admin/ingest \
 | `OBJECT_STORAGE_URL` | - | MinIO/S3 (e.g. http://minio:9000) |
 | `LLM_MODEL` | `gpt-5.2` | LLM model |
 | `LLM_MAX_TOKENS` | `2048` | Max tokens |
+| `APP_NAME` | - | Company/app name for branding (greeting, title) |
+| `NORMALIZER_DOMAIN_TERMS` | - | Comma-separated entity terms (e.g. vps,windows,linux,pricing) |
+| `NORMALIZER_SLOTS_ENABLED` | `false` | Enable slot extraction (product_type, os, billing_cycle, region) |
+| `NORMALIZER_SLOT_PRODUCT_TYPES` | - | Product types for slots (e.g. vps,dedicated,vds). Empty = disabled |
+| `NORMALIZER_SLOT_OS_TYPES` | - | OS types for os slot (e.g. windows,linux,macos). Empty = disabled |
 
 ## Scripts
 

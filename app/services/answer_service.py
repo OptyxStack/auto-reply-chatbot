@@ -66,8 +66,11 @@ class AnswerService:
         trace_id: str | None = None,
     ) -> AnswerOutput:
         """Generate grounded answer with retrieval and reviewer gate."""
-        from app.core.tracing import llm_usage_var
+        from app.core.tracing import llm_usage_var, llm_call_log_var
         llm_usage_var.set([])
+        from app.services.archi_config import get_debug_llm_calls
+        if get_debug_llm_calls():
+            llm_call_log_var.set([])
 
         _pipeline_log("answer_service", "start", query=query[:80], history_len=len(conversation_history or []), trace_id=trace_id)
 
@@ -107,6 +110,7 @@ class AnswerService:
         if query_spec and query_spec.skip_retrieval and query_spec.canned_response:
             _pipeline_log("answer_service", "skip_retrieval", intent=getattr(query_spec, "intent", ""), trace_id=trace_id)
             from app.core.metrics import compute_message_cost
+            from app.core.tracing import llm_call_log_var
             usage_list = llm_usage_var.get() or []
             cost_usd, agg_tokens, breakdown = compute_message_cost(usage_list)
             debug = {
@@ -120,6 +124,9 @@ class AnswerService:
                 debug["llm_tokens"] = agg_tokens
                 if breakdown:
                     debug["llm_usage_breakdown"] = breakdown
+            llm_call_log = llm_call_log_var.get() or []
+            if llm_call_log:
+                debug["llm_call_log"] = llm_call_log
             return AnswerOutput(
                 decision="PASS",
                 answer=query_spec.canned_response,
@@ -139,6 +146,8 @@ class AnswerService:
             from app.core.metrics import compute_message_cost
             usage_list = llm_usage_var.get() or []
             cost_usd, agg_tokens, breakdown = compute_message_cost(usage_list)
+            from app.core.tracing import llm_call_log_var
+            llm_call_log = llm_call_log_var.get() or []
             debug = build_flow_debug(
                 trace_id=trace_id,
                 evidence_pack=None,
@@ -148,6 +157,7 @@ class AnswerService:
                 llm_tokens=agg_tokens if (agg_tokens["input"] or agg_tokens["output"]) else None,
                 cost_usd=cost_usd if cost_usd > 0 else None,
                 llm_usage_breakdown=breakdown if breakdown else None,
+                llm_call_log=llm_call_log if llm_call_log else None,
                 query_spec=query_spec,
                 decision_router=dr,
                 source_lang=source_lang,

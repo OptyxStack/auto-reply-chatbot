@@ -103,7 +103,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Use 6380 on host to avoid Windows port 6379 exclusion
     volumes:
       - redis_data:/data
 

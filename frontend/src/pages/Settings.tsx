@@ -21,6 +21,8 @@ export default function Settings() {
   const [decisionRouterLlm, setDecisionRouterLlm] = useState(false)
   const [evidenceEvaluator, setEvidenceEvaluator] = useState(false)
   const [evidenceQualityUseLlm, setEvidenceQualityUseLlm] = useState(true)
+  const [evidenceQualityLlmV2, setEvidenceQualityLlmV2] = useState(false)
+  const [debugLlmCalls, setDebugLlmCalls] = useState(false)
   const [selfCritic, setSelfCritic] = useState(false)
   const [finalPolish, setFinalPolish] = useState(false)
   const [docTypeClassifier, setDocTypeClassifier] = useState(false)
@@ -44,6 +46,8 @@ export default function Settings() {
         setDecisionRouterLlm(archiData.decision_router_use_llm)
         setEvidenceEvaluator(archiData.evidence_evaluator_enabled)
         setEvidenceQualityUseLlm(archiData.evidence_quality_use_llm ?? true)
+        setEvidenceQualityLlmV2(archiData.evidence_quality_llm_v2 ?? false)
+        setDebugLlmCalls(archiData.debug_llm_calls ?? false)
         setSelfCritic(archiData.self_critic_enabled)
         setFinalPolish(archiData.final_polish_enabled)
         setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
@@ -99,6 +103,8 @@ export default function Settings() {
       setDecisionRouterLlm(archiData.decision_router_use_llm)
       setEvidenceEvaluator(archiData.evidence_evaluator_enabled)
       setEvidenceQualityUseLlm(archiData.evidence_quality_use_llm ?? false)
+      setEvidenceQualityLlmV2(archiData.evidence_quality_llm_v2 ?? false)
+      setDebugLlmCalls(archiData.debug_llm_calls ?? false)
       setSelfCritic(archiData.self_critic_enabled)
       setFinalPolish(archiData.final_polish_enabled)
       setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
@@ -124,6 +130,8 @@ export default function Settings() {
         decision_router_use_llm: decisionRouterLlm,
         evidence_evaluator_enabled: evidenceEvaluator,
         evidence_quality_use_llm: evidenceQualityUseLlm,
+        evidence_quality_llm_v2: evidenceQualityLlmV2,
+        debug_llm_calls: debugLlmCalls,
         self_critic_enabled: selfCritic,
         final_polish_enabled: finalPolish,
         doc_type_classifier_enabled: docTypeClassifier,
@@ -138,6 +146,8 @@ export default function Settings() {
       setDecisionRouterLlm(data.decision_router_use_llm)
       setEvidenceEvaluator(data.evidence_evaluator_enabled)
       setEvidenceQualityUseLlm(data.evidence_quality_use_llm ?? false)
+      setEvidenceQualityLlmV2(data.evidence_quality_llm_v2 ?? false)
+      setDebugLlmCalls(data.debug_llm_calls ?? false)
       setSelfCritic(data.self_critic_enabled)
       setFinalPolish(data.final_polish_enabled)
       setDocTypeClassifier(data.doc_type_classifier_enabled ?? false)
@@ -356,6 +366,20 @@ export default function Settings() {
             description="Use LLM for evidence quality gate instead of regex"
             checked={evidenceQualityUseLlm}
             onChange={setEvidenceQualityUseLlm}
+            disabled={savingArchi}
+          />
+          <ToggleRow
+            label="Evidence quality (LLM v2)"
+            description="Single pass/fail decision, no feature scores. Overrides LLM v1 when on."
+            checked={evidenceQualityLlmV2}
+            onChange={setEvidenceQualityLlmV2}
+            disabled={savingArchi}
+          />
+          <ToggleRow
+            label="Debug LLM calls"
+            description="Capture full prompts and responses for each LLM call in flow debug (normalizer, evidence_quality, generate, etc.)"
+            checked={debugLlmCalls}
+            onChange={setDebugLlmCalls}
             disabled={savingArchi}
           />
           <ToggleRow

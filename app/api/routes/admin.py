@@ -448,9 +448,11 @@ async def update_llm_config(
 async def get_archi_config(_auth: str = Depends(verify_admin_api_key)):
     """Get archi v3 feature flags from cache/DB."""
     from app.services.archi_config import (
+        get_debug_llm_calls,
         get_decision_router_use_llm,
         get_doc_type_classifier_enabled,
         get_evidence_evaluator_enabled,
+        get_evidence_quality_llm_v2,
         get_evidence_quality_use_llm,
         get_final_polish_enabled,
         get_language_detect_enabled,
@@ -464,6 +466,8 @@ async def get_archi_config(_auth: str = Depends(verify_admin_api_key)):
         decision_router_use_llm=get_decision_router_use_llm(),
         evidence_evaluator_enabled=get_evidence_evaluator_enabled(),
         evidence_quality_use_llm=get_evidence_quality_use_llm(),
+        evidence_quality_llm_v2=get_evidence_quality_llm_v2(),
+        debug_llm_calls=get_debug_llm_calls(),
         self_critic_enabled=get_self_critic_enabled(),
         final_polish_enabled=get_final_polish_enabled(),
         doc_type_classifier_enabled=get_doc_type_classifier_enabled(),
@@ -487,6 +491,8 @@ async def update_archi_config(
         ("decision_router_use_llm", body.decision_router_use_llm, True),
         ("evidence_evaluator_enabled", body.evidence_evaluator_enabled, True),
         ("evidence_quality_use_llm", body.evidence_quality_use_llm, True),
+        ("evidence_quality_llm_v2", body.evidence_quality_llm_v2, True),
+        ("debug_llm_calls", body.debug_llm_calls, True),
         ("self_critic_enabled", body.self_critic_enabled, True),
         ("final_polish_enabled", body.final_polish_enabled, True),
         ("doc_type_classifier_enabled", body.doc_type_classifier_enabled, True),
@@ -509,9 +515,11 @@ async def update_archi_config(
     await refresh_archi_config(db)
 
     from app.services.archi_config import (
+        get_debug_llm_calls,
         get_decision_router_use_llm,
         get_doc_type_classifier_enabled,
         get_evidence_evaluator_enabled,
+        get_evidence_quality_llm_v2,
         get_evidence_quality_use_llm,
         get_final_polish_enabled,
         get_language_detect_enabled,
@@ -525,6 +533,8 @@ async def update_archi_config(
         decision_router_use_llm=get_decision_router_use_llm(),
         evidence_evaluator_enabled=get_evidence_evaluator_enabled(),
         evidence_quality_use_llm=get_evidence_quality_use_llm(),
+        evidence_quality_llm_v2=get_evidence_quality_llm_v2(),
+        debug_llm_calls=get_debug_llm_calls(),
         self_critic_enabled=get_self_critic_enabled(),
         final_polish_enabled=get_final_polish_enabled(),
         doc_type_classifier_enabled=get_doc_type_classifier_enabled(),

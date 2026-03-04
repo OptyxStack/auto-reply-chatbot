@@ -22,6 +22,8 @@ CONFIG_KEYS = (
     "decision_router_use_llm",
     "evidence_evaluator_enabled",
     "evidence_quality_use_llm",
+    "evidence_quality_llm_v2",
+    "debug_llm_calls",
     "self_critic_enabled",
     "final_polish_enabled",
     "doc_type_classifier_enabled",
@@ -90,7 +92,7 @@ def get_language_detect_enabled() -> bool:
 def get_decision_router_use_llm() -> bool:
     if "decision_router_use_llm" in _cache:
         return _cache["decision_router_use_llm"]
-    return getattr(get_settings(), "decision_router_use_llm", False)
+    return getattr(get_settings(), "decision_router_use_llm", True)
 
 
 def get_evidence_evaluator_enabled() -> bool:
@@ -104,6 +106,20 @@ def get_evidence_quality_use_llm() -> bool:
     if "evidence_quality_use_llm" in _cache:
         return _cache["evidence_quality_use_llm"]
     return getattr(get_settings(), "evidence_quality_use_llm", True)
+
+
+def get_evidence_quality_llm_v2() -> bool:
+    """Use LLM v2 (single pass/fail). When True, assess phase uses evaluate_quality_llm_v2."""
+    if "evidence_quality_llm_v2" in _cache:
+        return _cache["evidence_quality_llm_v2"]
+    return getattr(get_settings(), "evidence_quality_llm_v2", False)
+
+
+def get_debug_llm_calls() -> bool:
+    """Capture full LLM prompts and responses in flow debug. From DB or env."""
+    if "debug_llm_calls" in _cache:
+        return _cache["debug_llm_calls"]
+    return getattr(get_settings(), "debug_llm_calls", False)
 
 
 def get_self_critic_enabled() -> bool:

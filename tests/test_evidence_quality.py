@@ -63,6 +63,15 @@ def test_passes_quality_gate_no_required():
     assert passes_quality_gate(report, None)
 
 
+def test_passes_quality_gate_uses_gate_pass_when_set():
+    """When report.gate_pass is set (LLM v2), passes_quality_gate uses it directly."""
+    report_pass = QualityReport(0.3, {}, ["missing_numbers"], None, 0.5, gate_pass=True)
+    assert passes_quality_gate(report_pass, ["numbers_units"], hard_requirements=["numbers_units"])
+
+    report_fail = QualityReport(0.8, {"numbers_units": 0.9}, [], None, 0.1, gate_pass=False)
+    assert not passes_quality_gate(report_fail, None)
+
+
 def test_hard_requirement_uses_sufficiency_not_average_threshold():
     """A single strong chunk can satisfy a hard requirement even when average ratio is low."""
     chunks = [

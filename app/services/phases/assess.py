@@ -1,7 +1,12 @@
 """ASSESS_EVIDENCE phase: quality gate."""
 
-from app.services.archi_config import get_evidence_quality_use_llm
-from app.services.evidence_quality import evaluate_quality, evaluate_quality_llm, passes_quality_gate
+from app.services.archi_config import get_evidence_quality_llm_v2, get_evidence_quality_use_llm
+from app.services.evidence_quality import (
+    evaluate_quality,
+    evaluate_quality_llm,
+    evaluate_quality_llm_v2,
+    passes_quality_gate,
+)
 from app.services.flow_debug import _pipeline_log
 from app.services.orchestrator import OrchestratorContext, PhaseResult
 
@@ -11,7 +16,14 @@ async def execute_assess_evidence(ctx: OrchestratorContext) -> PhaseResult:
     required_evidence = ctx.extra.get("required_evidence", [])
     hard_requirements = ctx.extra.get("hard_requirements", [])
 
-    if get_evidence_quality_use_llm():
+    if get_evidence_quality_llm_v2():
+        quality_report = await evaluate_quality_llm_v2(
+            ctx.query,
+            ctx.evidence,
+            required_evidence,
+            hard_requirements=hard_requirements,
+        )
+    elif get_evidence_quality_use_llm():
         quality_report = await evaluate_quality_llm(
             ctx.query,
             ctx.evidence,

@@ -1,7 +1,7 @@
 """Build AnswerOutput for terminal orchestrator actions."""
 
 from app.core.metrics import compute_message_cost
-from app.core.tracing import llm_usage_var
+from app.core.tracing import llm_call_log_var, llm_usage_var
 from app.services.flow_debug import build_flow_debug
 from app.services.final_polish import polish as final_polish
 from app.services.archi_config import get_final_polish_enabled
@@ -18,6 +18,7 @@ async def build_output(
     """Build AnswerOutput for terminal actions (DONE, ASK_USER, ESCALATE)."""
     extra = ctx.extra
     usage_list = llm_usage_var.get() or []
+    llm_call_log = llm_call_log_var.get() or []
     cost_usd, agg_tokens, usage_breakdown = compute_message_cost(usage_list)
     llm_resp = extra.get("llm_resp")
     llm_tokens_for_debug = (
@@ -69,6 +70,7 @@ async def build_output(
                 llm_tokens=llm_tokens_for_debug,
                 cost_usd=cost_usd if cost_usd > 0 else None,
                 llm_usage_breakdown=usage_breakdown if usage_breakdown else None,
+                llm_call_log=llm_call_log if llm_call_log else None,
                 attempt=attempt,
                 finish_reason=getattr(llm_resp, "finish_reason", None) if llm_resp else None,
                 quality_report=ctx.quality_report,
@@ -114,6 +116,7 @@ async def build_output(
                 llm_tokens=llm_tokens_for_debug,
                 cost_usd=cost_usd if cost_usd > 0 else None,
                 llm_usage_breakdown=usage_breakdown if usage_breakdown else None,
+                llm_call_log=llm_call_log if llm_call_log else None,
                 attempt=attempt,
                 reviewer_reasons=getattr(rr, "reasons", []) if rr else None,
                 quality_report=ctx.quality_report,
@@ -154,6 +157,7 @@ async def build_output(
                     llm_tokens=llm_tokens_for_debug,
                     cost_usd=cost_usd if cost_usd > 0 else None,
                     llm_usage_breakdown=usage_breakdown if usage_breakdown else None,
+                    llm_call_log=llm_call_log if llm_call_log else None,
                     attempt=attempt,
                     quality_report=ctx.quality_report,
                     retry_strategy_applied=retry_strategy_applied,
@@ -189,6 +193,7 @@ async def build_output(
                 llm_tokens=llm_tokens_for_debug,
                 cost_usd=cost_usd if cost_usd > 0 else None,
                 llm_usage_breakdown=usage_breakdown if usage_breakdown else None,
+                llm_call_log=llm_call_log if llm_call_log else None,
                 attempt=attempt,
                 reviewer_reasons=getattr(rr, "reasons", []) if rr else None,
                 max_attempts_reached=max_reached,

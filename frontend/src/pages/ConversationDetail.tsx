@@ -592,6 +592,39 @@ function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
         </DebugSection>
       )}
 
+      {debug.llm_call_log && debug.llm_call_log.length > 0 && (
+        <DebugSection icon={<Brain size={13} />} title="LLM Call Log (prompts & responses)">
+          <div className="space-y-4">
+            {debug.llm_call_log.map((call, i) => (
+              <div key={i} className="p-3 bg-black/20 rounded-xl border border-white/[0.06]">
+                <div className="flex items-center gap-2 mb-2 text-zinc-400">
+                  <span className="font-medium text-violet-400">{call.task}</span>
+                  <span className="text-[10px]">{call.model}</span>
+                  <span className="text-[10px]">in:{call.input_tokens} out:{call.output_tokens}</span>
+                  <span className="text-emerald-500/80 text-[10px]">${call.cost_usd?.toFixed(6)}</span>
+                </div>
+                <div className="space-y-2 text-[11px]">
+                  {call.messages?.map((m, j) => (
+                    <div key={j}>
+                      <div className="text-zinc-500 mb-0.5">{m.role}:</div>
+                      <pre className="whitespace-pre-wrap break-words text-zinc-400 max-h-48 overflow-y-auto p-2 rounded bg-black/30">
+                        {m.content}
+                      </pre>
+                    </div>
+                  ))}
+                  <div>
+                    <div className="text-zinc-500 mb-0.5">Response:</div>
+                    <pre className="whitespace-pre-wrap break-words text-zinc-300 max-h-48 overflow-y-auto p-2 rounded bg-black/30">
+                      {call.response_content}
+                    </pre>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </DebugSection>
+      )}
+
       {debug.max_attempts_reached && (
         <div className="px-4 py-3 bg-amber-500/10 border-t border-white/[0.04] text-amber-400 text-xs flex items-center gap-2">
           <AlertTriangle size={12} />

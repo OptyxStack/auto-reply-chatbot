@@ -1,7 +1,6 @@
 """Request Normalizer – Phase 2: QuerySpec from raw query.
 
-Rule-based by default; optional LLM for intent/entities/evidence inference.
-Use normalizer_use_llm=True for better accuracy on complex queries.
+LLM-only: all queries go through LLM. Minimal fallback when LLM fails.
 """
 
 import json
@@ -29,16 +28,25 @@ Output schema:
   "risk_level": "low|medium|high",
   "is_ambiguous": false,
   "clarifying_questions": [],
+  "keyword_queries": ["primary phrase for BM25 keyword search"],
+  "semantic_queries": ["primary phrase for vector/semantic search"],
   "retrieval_rewrites": ["phrase1", "phrase2", ...],
   "skip_retrieval": false,
-  "canned_response": "optional greeting when skip_retrieval is true"
+  "canned_response": "optional greeting when skip_retrieval is true",
+  "product_type": "optional: main product/category from query (e.g. vps, dedicated, plan_a)",
+  "os": "optional: OS or environment (e.g. windows, linux, macos)",
+  "comparison_targets": ["optional: when comparing, list 2-3 items being compared"],
+  "billing_cycle": "optional: monthly or yearly if mentioned"
 }
 
-retrieval_rewrites: 2-5 short phrases optimized for document search. For product/feature questions (e.g. proxy, VPS, backup), include terms likely to appear in docs: "proxy service", "proxy servers", "proxy option". For pricing: "pricing", "USD", "monthly". Empty array if not needed.
+keyword_queries: 1-2 phrases for BM25. Extract ONLY the current question's core terms. Ignore irrelevant prior messages (greetings, lyrics, noise). Example: "i forgot my account password" -> ["forgot password account recovery reset password"].
+semantic_queries: 1-2 natural phrases for vector search. Same rule: use only the current user intent. Example: "i forgot my account password" -> ["forgot account password reset recovery"].
+
+retrieval_rewrites: 2-5 short phrases for retry. Include synonyms and doc terms: "product pricing", "plan comparison". For policy queries (refund, terms), prefer policy-focused phrases first: "refund policy", "terms of service" before "order cancellation" (which can match order links). Empty if not needed.
 
 Intent rules:
-- social: ONLY pure greetings, thanks, or farewells with NO product/service/question. Examples: hi, hello, hey, hiii, chào, thanks, ok, bye. NOT social: "do u provide cookie", "u wanna buy proxy", "do you have X" – these ask about products/services and need retrieval (use informational or transactional).
-- transactional: price, cost, order, buy, subscribe, mua, giá, proxy, cookie, product names
+- social: ONLY pure greetings, thanks, or farewells with NO product/service/question. Examples: hi, hello, hey, hiii, chào, thanks, ok, bye. NOT social: "do you have X", "what plans do you offer", "do you provide Y" – these ask about products/services and need retrieval (use informational or transactional).
+- transactional: price, cost, order, buy, subscribe, mua, giá, product names
 - comparison: diff, compare, vs, khác, so sánh
 - policy: refund, policy, terms, cancellation, hoàn tiền
 - troubleshooting: how, step, setup, cách, hướng dẫn, fix
@@ -46,10 +54,12 @@ Intent rules:
 - informational: questions about products, services, features (do you provide X, do you have X, what is X, tell me about X)
 - ambiguous: referent unclear (e.g. "what diff from this?") when user refers to prior message
 
-skip_retrieval: true ONLY when intent is social. If the user asks about any product, service, or feature (cookie, proxy, VPS, etc.), use informational or transactional and skip_retrieval=false.
+skip_retrieval: true ONLY when intent is social. If the user asks about any product, service, or feature, use informational or transactional and skip_retrieval=false.
 canned_response: when skip_retrieval is true, provide a friendly greeting like "Hello! Welcome. How can I help you today?"
 
 Entities: domain terms relevant to the support context (e.g. product names, pricing, plans, features). Include synonyms if relevant.
+
+product_type, os, comparison_targets, billing_cycle: Infer from the query when clear. E.g. "VPS pricing for Windows" -> product_type: "vps", os: "windows". "compare dedicated vs VDS" -> comparison_targets: ["dedicated", "vds"]. "monthly plans" -> billing_cycle: "monthly". Omit when not mentioned.
 
 required_evidence: only include what the query needs:
 - numbers_units: price/cost/specs
@@ -127,6 +137,30 @@ def _get_configured_domain_terms() -> list[str]:
     return terms
 
 
+def _parse_comma_list(raw: str) -> list[str]:
+    """Parse comma-separated config string into normalized list."""
+    if not (raw or "").strip():
+        return []
+    terms: list[str] = []
+    seen: set[str] = set()
+    for item in raw.split(","):
+        t = item.strip().lower()
+        if t and t not in seen:
+            seen.add(t)
+            terms.append(t)
+    return terms
+
+
+def _get_configured_slot_product_types() -> list[str]:
+    """Return product types for slot extraction from config. Empty = disabled."""
+    return _parse_comma_list(getattr(get_settings(), "normalizer_slot_product_types", "") or "")
+
+
+def _get_configured_slot_os_types() -> list[str]:
+    """Return OS types for os slot from config. Empty = disabled."""
+    return _parse_comma_list(getattr(get_settings(), "normalizer_slot_os_types", "") or "")
+
+
 def _collect_config_overrides_applied() -> list[str]:
     """Expose which hybrid normalizer compatibility switches are active."""
     settings = get_settings()
@@ -137,6 +171,10 @@ def _collect_config_overrides_applied() -> list[str]:
         overrides.append("normalizer_query_expansion")
     if getattr(settings, "normalizer_slots_enabled", False):
         overrides.append("normalizer_slots_enabled")
+    if _get_configured_slot_product_types():
+        overrides.append("normalizer_slot_product_types")
+    if _get_configured_slot_os_types():
+        overrides.append("normalizer_slot_os_types")
     return overrides
 
 
@@ -259,25 +297,29 @@ def _infer_user_goal(intent: str, query: str) -> str:
 
 
 def _extract_slots(query: str, entities: list[str]) -> dict[str, Any]:
-    """Extract optional deployment-specific slots when enabled."""
+    """Extract optional deployment-specific slots when enabled. Product/OS types come from config."""
     if not getattr(get_settings(), "normalizer_slots_enabled", False):
         return {}
 
     q = query.lower()
     slots: dict[str, Any] = {}
 
-    for product in ("dedicated", "vds", "vps"):
-        if product in entities:
-            slots["product_type"] = product
-            break
+    product_types = _get_configured_slot_product_types()
+    if product_types:
+        for product in product_types:
+            if product in entities:
+                slots["product_type"] = product
+                break
+        comparison_targets = [name for name in product_types if name in entities]
+        if len(comparison_targets) >= 2:
+            slots["comparison_targets"] = comparison_targets[:3]
 
-    for os_name in ("windows", "linux", "macos"):
-        if os_name in entities:
-            slots["os"] = os_name
-            break
-
-    if "kvm" in entities:
-        slots["virtualization"] = "kvm"
+    os_types = _get_configured_slot_os_types()
+    if os_types:
+        for os_name in os_types:
+            if os_name in entities:
+                slots["os"] = os_name
+                break
 
     if any(kw in q for kw in ["monthly", "/mo", "per month", "month"]):
         slots["billing_cycle"] = "monthly"
@@ -303,10 +345,6 @@ def _extract_slots(query: str, entities: list[str]) -> dict[str, Any]:
         slots["requested_action"] = "order_link"
     elif any(kw in q for kw in ["price", "cost", "pricing"]):
         slots["requested_action"] = "price_lookup"
-
-    comparison_targets = [name for name in ("dedicated", "vds", "vps") if name in entities]
-    if len(comparison_targets) >= 2:
-        slots["comparison_targets"] = comparison_targets[:3]
 
     return slots
 
@@ -436,6 +474,7 @@ def _build_query_spec(
     semantic_queries: list[str] | None = None,
     retrieval_rewrites: list[str] | None = None,
     extraction_mode: str = "rule_primary",
+    llm_slots: dict[str, Any] | None = None,
 ) -> QuerySpec:
     """Create a richer QuerySpec while remaining backward-compatible."""
     original_query = query.strip()
@@ -468,6 +507,8 @@ def _build_query_spec(
             keyword_queries = [f"{kw} {' '.join(extra)}".strip()]
 
     resolved_slots = _extract_slots(effective_query, entities)
+    if llm_slots:
+        resolved_slots = {**resolved_slots, **llm_slots}
     missing_slots = _infer_missing_slots(intent, effective_query, resolved_slots)
     ambiguity_type = _infer_ambiguity_type(is_ambiguous, missing_slots)
     user_goal = _infer_user_goal(intent, effective_query)
@@ -540,7 +581,7 @@ def _build_queries(
                     seen.add(tl)
                     unique.append(t)
             if unique:
-                base = f"{' '.join(unique[:3])} {base}".strip()
+                base = f"{' '.join(unique)} {base}".strip()
 
     semantic = base
     keyword = base
@@ -574,37 +615,24 @@ def _build_queries(
     return [keyword], [semantic]
 
 
-def _normalize_rule_based(
-    query: str,
-    conversation_history: list[dict[str, str]] | None,
-    source_lang: str | None = None,
-) -> QuerySpec:
-    """Minimal rule-based QuerySpec used as primary or fallback path."""
-    intent = _infer_intent(query)
-    entities = _extract_entities(query)
-    required_evidence = _infer_minimal_required_evidence(intent, query)
-    risk_level = _infer_risk_level(query)
-    is_ambiguous, clarifying_questions = _detect_ambiguity(query, conversation_history)
-
-    if is_ambiguous:
-        intent = "ambiguous"
-        clarifying_questions = clarifying_questions[:3]
-
-    keyword_queries, semantic_queries = _build_queries(query, intent, entities, conversation_history)
-    return _build_query_spec(
-        query=query,
-        conversation_history=conversation_history,
-        intent=intent,
-        entities=entities,
-        required_evidence=required_evidence,
-        risk_level=risk_level,
-        is_ambiguous=is_ambiguous,
-        clarifying_questions=clarifying_questions,
-        source_lang=source_lang,
-        keyword_queries=keyword_queries,
-        semantic_queries=semantic_queries,
-        extraction_mode="rule_primary",
-    )
+def _parse_llm_slots(data: dict[str, Any]) -> dict[str, Any]:
+    """Extract optional slots inferred by LLM from response. Empty/null values omitted."""
+    slots: dict[str, Any] = {}
+    pt = (data.get("product_type") or "").strip()
+    if pt:
+        slots["product_type"] = pt.lower()
+    os_val = (data.get("os") or "").strip()
+    if os_val:
+        slots["os"] = os_val.lower()
+    bc = (data.get("billing_cycle") or "").strip().lower()
+    if bc in ("monthly", "yearly"):
+        slots["billing_cycle"] = bc
+    ct = data.get("comparison_targets")
+    if isinstance(ct, list) and len(ct) >= 2:
+        targets = [str(t).strip().lower() for t in ct[:3] if t]
+        if len(targets) >= 2:
+            slots["comparison_targets"] = targets
+    return slots
 
 
 def _get_normalizer_prompt(source_lang: str | None) -> str:
@@ -639,6 +667,8 @@ async def _normalize_llm(
     user_content = "\n\n".join(user_parts)
 
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("normalizer")
         llm = get_llm_gateway()
         resp = await llm.chat(
             messages=[
@@ -720,9 +750,25 @@ async def _normalize_llm(
             _, clarifying_questions = _detect_ambiguity(query, conversation_history)
             clarifying_questions = clarifying_questions[:3]
 
-        keyword_queries, semantic_queries = _build_queries(
-            canonical_query_en, intent, entities, conversation_history
-        )
+        keyword_queries = [
+            str(k).strip() for k in data.get("keyword_queries", [])
+            if isinstance(k, str) and str(k).strip()
+        ][:2]
+        semantic_queries = [
+            str(s).strip() for s in data.get("semantic_queries", [])
+            if isinstance(s, str) and str(s).strip()
+        ][:2]
+        if keyword_queries or semantic_queries:
+            if not keyword_queries:
+                keyword_queries = semantic_queries[:1] if semantic_queries else [canonical_query_en]
+            if not semantic_queries:
+                semantic_queries = keyword_queries[:1] if keyword_queries else [canonical_query_en]
+        else:
+            keyword_queries, semantic_queries = _build_queries(
+                canonical_query_en, intent, entities, conversation_history
+            )
+
+        llm_slots = _parse_llm_slots(data)
 
         spec = _build_query_spec(
             query=query,
@@ -739,6 +785,7 @@ async def _normalize_llm(
             semantic_queries=semantic_queries,
             retrieval_rewrites=retrieval_rewrites if retrieval_rewrites else None,
             extraction_mode="llm_primary",
+            llm_slots=llm_slots,
         )
         logger.info(
             "normalizer_llm",
@@ -760,56 +807,49 @@ async def _normalize_llm(
         return None
 
 
+def _build_minimal_fallback(query: str, source_lang: str | None = None) -> QuerySpec:
+    """Minimal QuerySpec when LLM fails. Ensures pipeline continues."""
+    q = query.strip()
+    lang = (source_lang or "en").strip().lower() or "en"
+    return QuerySpec(
+        intent="informational",
+        entities=[],
+        constraints={},
+        required_evidence=[],
+        risk_level="low",
+        keyword_queries=[q],
+        semantic_queries=[q],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        skip_retrieval=False,
+        canned_response=None,
+        original_query=q,
+        source_lang=lang,
+        translation_needed=False,
+        user_goal="general_info",
+        resolved_slots={},
+        missing_slots=[],
+        answerable_without_clarification=True,
+        hard_requirements=[],
+        soft_requirements=[],
+        retrieval_profile="generic_profile",
+        rewrite_candidates=[q],
+        answer_mode_hint="strong",
+        extraction_mode="llm_fallback",
+        config_overrides_applied=[],
+    )
+
+
 async def normalize(
     query: str,
     conversation_history: list[dict[str, str]] | None = None,
     locale: str | None = None,
     source_lang: str | None = None,
 ) -> QuerySpec:
-    """Produce QuerySpec from raw query. Uses LLM when normalizer_use_llm=True, else rule-based."""
+    """Produce QuerySpec from raw query. LLM-only; minimal fallback on error."""
     q_stripped = query.strip()
-    settings = get_settings()
-    use_llm = getattr(settings, "normalizer_use_llm", False)
-
-    # When use_llm: let LLM decide (including greetings like hii, helloo). No regex pre-check.
-    # When not use_llm: fast path for known greetings via regex
-    if not use_llm and SKIP_RETRIEVAL_PATTERN.match(q_stripped):
-        logger.debug("normalizer_skip_retrieval", query_preview=q_stripped[:50])
-        return QuerySpec(
-            intent="social",
-            entities=[],
-            constraints={},
-            required_evidence=[],
-            risk_level="low",
-            keyword_queries=[],
-            semantic_queries=[],
-            clarifying_questions=[],
-            is_ambiguous=False,
-            skip_retrieval=True,
-            canned_response=_get_greeting_response(),
-            original_query=q_stripped,
-            source_lang=(source_lang or "en").strip().lower() or "en",
-            translation_needed=False,
-            user_goal="general_info",
-            resolved_slots={},
-            missing_slots=[],
-            answerable_without_clarification=True,
-            hard_requirements=[],
-            soft_requirements=[],
-            retrieval_profile="generic_profile",
-            rewrite_candidates=[],
-            answer_mode_hint="strong",
-            extraction_mode="rule_primary",
-            config_overrides_applied=_collect_config_overrides_applied(),
-        )
-
-    if use_llm:
-        spec = await _normalize_llm(query, conversation_history, source_lang)
-        if spec is not None:
-            return spec
-        logger.debug("normalizer_llm_fallback", reason="llm_failed_or_empty")
-        fallback_spec = _normalize_rule_based(query, conversation_history, source_lang=source_lang)
-        fallback_spec.extraction_mode = "rule_fallback"
-        return fallback_spec
-
-    return _normalize_rule_based(query, conversation_history, source_lang=source_lang)
+    spec = await _normalize_llm(q_stripped, conversation_history, source_lang)
+    if spec is not None:
+        return spec
+    logger.warning("normalizer_llm_fallback", reason="llm_failed", query_preview=q_stripped[:80])
+    return _build_minimal_fallback(q_stripped, source_lang)

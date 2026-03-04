@@ -78,6 +78,7 @@ class QualityReport:
     boilerplate_risk: float | None
     sufficiency_scores: dict[str, float] | None = None
     hard_requirement_coverage: dict[str, bool] | None = None
+    gate_pass: bool | None = None  # LLM v2: direct pass/fail; when set, passes_quality_gate uses it
 
 
 # required_evidence → feature mapping
@@ -382,6 +383,7 @@ EVIDENCE_QUALITY_LLM_PROMPT = """You evaluate whether retrieved evidence is suff
 
 Output JSON only, no markdown:
 {
+  "pass": true | false,
   "numbers_units": 0.0-1.0,
   "has_any_url": 0.0-1.0,
   "has_transaction_link": 0.0-1.0,
@@ -392,6 +394,8 @@ Output JSON only, no markdown:
   "quality_score": 0.0-1.0,
   "missing_signals": []
 }
+
+pass: YOUR final decision. true = evidence suffices to answer; false = insufficient. Be generous: if evidence has relevant product/pricing links (vps, windows-vps, budget, order pages), pass=true even without exact $ numbers. Only pass=false when evidence is clearly irrelevant or empty.
 
 Query-aware scoring:
 - For "do you have X?" / product availability: evidence that confirms the product exists (e.g. dedicated-servers page for "dedicated server") is sufficient. quality_score 0.7+ if evidence directly answers.
@@ -437,9 +441,11 @@ async def evaluate_quality_llm(
         user_content += f"\n\nRequired/hard: {required_evidence or []} {hard_reqs}"
 
     try:
+        from app.core.tracing import current_llm_task_var
         from app.services.llm_gateway import get_llm_gateway
         from app.services.model_router import get_model_for_task
 
+        current_llm_task_var.set("evidence_quality")
         llm = get_llm_gateway()
         model = get_model_for_task("evidence_quality")
         resp = await llm.chat(
@@ -460,6 +466,7 @@ async def evaluate_quality_llm(
             text = match.group(1) if match else text
 
         data = json.loads(text)
+        gate_pass = bool(data["pass"]) if data.get("pass") is not None else None
         feature_scores = {
             "numbers_units": float(data.get("numbers_units", 0)),
             "has_any_url": float(data.get("has_any_url", 0)),
@@ -495,9 +502,113 @@ async def evaluate_quality_llm(
             boilerplate_risk=round(boilerplate_risk, 3),
             sufficiency_scores={k: round(v, 3) for k, v in sufficiency_scores.items()},
             hard_requirement_coverage=hard_coverage,
+            gate_pass=gate_pass,
         )
     except Exception as e:
         logger.warning("evidence_quality_llm_failed", error=str(e), query=query[:50])
+        return evaluate_quality(chunks, required_evidence, hard_requirements=hard_reqs)
+
+
+EVIDENCE_QUALITY_LLM_V2_PROMPT = """You evaluate whether retrieved evidence is sufficient to answer the user's query.
+
+Output JSON only, no markdown:
+{
+  "pass": true | false,
+  "confidence": 0.0-1.0,
+  "reason": "one sentence",
+  "missing_signals": []
+}
+
+Rules (apply consistently across all query types: policy, pricing, troubleshooting, account, informational):
+- pass=true when evidence clearly answers the query OR contains partial but usable information.
+- pass=false ONLY when evidence is irrelevant, empty, or completely lacks the requested type of information.
+- Be generous: partial evidence that can partially answer = pass=true with lower confidence (0.4-0.7).
+- For policy queries (refund, terms, cancellation): product-specific policy (e.g. "no refund for proxies", "promo not refundable") = policy_language present. pass=true.
+- For pricing: approximate prices or links to pricing pages = pass=true. Exact numbers not required.
+- For how-to/troubleshooting: partial steps or related docs = pass=true. Full step-by-step not required.
+- missing_signals: only when pass=false. Use: missing_numbers, missing_transaction_link, missing_policy, missing_steps, missing_links. Empty if pass=true."""
+
+
+async def evaluate_quality_llm_v2(
+    query: str,
+    chunks: list[EvidenceChunk],
+    required_evidence: list[str] | None = None,
+    hard_requirements: list[str] | None = None,
+) -> QualityReport:
+    """LLM v2: single pass/fail decision. Simpler, query-aware, no feature-score coupling."""
+    hard_reqs = list(dict.fromkeys(hard_requirements or []))
+    if not chunks:
+        sufficiency_scores = _compute_sufficiency_scores([])
+        hard_coverage = _derive_hard_requirement_coverage(hard_reqs, sufficiency_scores)
+        return QualityReport(
+            quality_score=0.0,
+            feature_scores={},
+            missing_signals=["missing_evidence"] if (required_evidence or hard_reqs) else [],
+            staleness_risk=None,
+            boilerplate_risk=1.0,
+            sufficiency_scores=sufficiency_scores,
+            hard_requirement_coverage=hard_coverage,
+            gate_pass=False,
+        )
+
+    summaries = []
+    for i, c in enumerate(chunks[:12], 1):
+        text = (c.full_text or c.snippet or "")[:300]
+        summaries.append(f"[{i}] {c.source_url or '?'}: {text}...")
+
+    user_content = f"Query: {query[:400]}\n\nEvidence:\n" + "\n".join(summaries)
+    if required_evidence or hard_reqs:
+        user_content += f"\n\nHint (query context): {required_evidence or []} {hard_reqs}"
+
+    try:
+        from app.core.tracing import current_llm_task_var
+        from app.services.llm_gateway import get_llm_gateway
+        from app.services.model_router import get_model_for_task
+
+        current_llm_task_var.set("evidence_quality_v2")
+        llm = get_llm_gateway()
+        model = get_model_for_task("evidence_quality")
+        resp = await llm.chat(
+            messages=[
+                {"role": "system", "content": EVIDENCE_QUALITY_LLM_V2_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            temperature=0.0,
+            model=model,
+            max_tokens=256,
+        )
+        text = (resp.content or "").strip()
+        if "```json" in text:
+            match = re.search(r"```json\s*([\s\S]*?)\s*```", text)
+            text = match.group(1) if match else text
+        elif "```" in text:
+            match = re.search(r"```\s*([\s\S]*?)\s*```", text)
+            text = match.group(1) if match else text
+
+        data = json.loads(text)
+        gate_pass = bool(data.get("pass", False))
+        confidence = float(data.get("confidence", 0.5))
+        missing_signals = [str(x) for x in (data.get("missing_signals") or [])]
+
+        sigs = compute_hygiene(chunks)
+        boilerplate_risk = sigs.pct_chunks_boilerplate_gt_06 / 100.0
+
+        # Always compute sufficiency for decision router (PASS_WEAK path when gate_pass=False)
+        sufficiency_scores = _compute_sufficiency_scores(chunks)
+        hard_coverage = _derive_hard_requirement_coverage(hard_reqs, sufficiency_scores)
+
+        return QualityReport(
+            quality_score=round(confidence, 3),
+            feature_scores={},
+            missing_signals=missing_signals,
+            staleness_risk=None,
+            boilerplate_risk=round(boilerplate_risk, 3),
+            sufficiency_scores={k: round(v, 3) for k, v in sufficiency_scores.items()},
+            hard_requirement_coverage=hard_coverage,
+            gate_pass=gate_pass,
+        )
+    except Exception as e:
+        logger.warning("evidence_quality_llm_v2_failed", error=str(e), query=query[:50])
         return evaluate_quality(chunks, required_evidence, hard_requirements=hard_reqs)
 
 
@@ -525,10 +636,14 @@ def passes_quality_gate(
     thresholds: dict[str, float] | None = None,
     hard_requirements: list[str] | None = None,
 ) -> bool:
-    """PASS when hard requirements are sufficiently covered and soft ones meet thresholds."""
+    """PASS when hard requirements are sufficiently covered and soft ones meet thresholds.
+    When report.gate_pass is set (LLM v1 or v2), use it directly and skip rule logic."""
     settings = get_settings()
     if not getattr(settings, "evidence_quality_enabled", True):
         return True
+
+    if report.gate_pass is not None:
+        return report.gate_pass
 
     thresh = thresholds or getattr(settings, "evidence_feature_thresholds", None) or {
         "numbers_units": 0.3,

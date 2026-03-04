@@ -231,6 +231,47 @@ def collect_rewrite_candidates(
     return deduped
 
 
+def _pick_intent_aligned_rewrite(
+    base_query: str,
+    rewrite_candidates: list[str],
+    attempt: int,
+    retry_strategy: Any | None,
+    query_spec: QuerySpec | None,
+) -> tuple[str | None, str]:
+    """Pick rewrite that aligns with retry intent to avoid semantic drift.
+
+    E.g. for missing_policy + filter_doc_types [policy,tos], prefer
+    'refund policy' over 'order cancellation' (which can match order links).
+    """
+    if attempt <= 1 or not retry_strategy or not rewrite_candidates:
+        return None, ""
+
+    filter_doc_types = getattr(retry_strategy, "filter_doc_types", None) or []
+    intent = getattr(query_spec, "intent", "") if query_spec else ""
+    base_lower = base_query.lower().strip()
+
+    # Policy/tos retry: prefer policy-focused phrases
+    if set(filter_doc_types) & {"policy", "tos"} or intent == "policy":
+        policy_terms = ("policy", "terms", "refund", "cancellation policy", "terms of service")
+        drift_terms = ("order", "buy", "checkout")  # can match transaction pages
+        for c in rewrite_candidates[1:]:  # skip base
+            c_lower = c.lower().strip()
+            if not c_lower or c_lower == base_lower:
+                continue
+            if any(p in c_lower for p in policy_terms) and not any(d in c_lower for d in drift_terms):
+                return c.strip(), "intent_aligned_rewrite"
+    # Steps/howto retry: prefer step-focused phrases
+    boost = getattr(retry_strategy, "boost_patterns", None) or []
+    if any(b in ("step", "1.", "2.", "first", "second") for b in boost):
+        step_terms = ("step", "how to", "guide", "setup", "install")
+        for c in rewrite_candidates[1:]:
+            c_lower = c.lower().strip()
+            if c_lower and c_lower != base_lower and any(s in c_lower for s in step_terms):
+                return c.strip(), "intent_aligned_rewrite"
+
+    return None, ""
+
+
 def resolve_retrieval_query(
     *,
     base_query: str,
@@ -243,6 +284,8 @@ def resolve_retrieval_query(
 
     This keeps the user-facing effective query stable while allowing retrieval
     retries to use structured rewrite candidates or explicit overrides.
+    Intent-aligned selection avoids semantic drift (e.g. 'order cancellation'
+    matching order links instead of policy).
     """
     rewrite_candidates = collect_rewrite_candidates(base_query, query_spec)
 
@@ -255,6 +298,13 @@ def resolve_retrieval_query(
         return explicit_override.strip(), "explicit_retry_query", rewrite_candidates
 
     if attempt > 1 and len(rewrite_candidates) > 1:
+        # Prefer intent-aligned rewrite to avoid semantic drift
+        picked, reason = _pick_intent_aligned_rewrite(
+            base_query, rewrite_candidates, attempt, retry_strategy, query_spec
+        )
+        if picked:
+            return picked, reason, rewrite_candidates
+
         idx = min(attempt - 1, len(rewrite_candidates) - 1)
         candidate = rewrite_candidates[idx].strip()
         if candidate:

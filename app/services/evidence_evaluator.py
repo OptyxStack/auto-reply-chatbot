@@ -60,6 +60,8 @@ async def evaluate_evidence(
     user_content = f"Query: {query}\n\nEvidence summaries:\n" + "\n".join(summaries)
 
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("evidence_evaluator")
         llm = get_llm_gateway()
         model = get_model_for_task("evidence_evaluator")
         resp = await llm.chat(

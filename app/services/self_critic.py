@@ -61,6 +61,8 @@ Evidence preview:
 {evidence_preview}"""
 
     try:
+        from app.core.tracing import current_llm_task_var
+        current_llm_task_var.set("self_critic")
         llm = get_llm_gateway()
         model = get_model_for_task("self_critic")
         resp = await llm.chat(

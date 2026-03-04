@@ -142,6 +142,27 @@ class OpenAIGateway(LLMGateway):
                         acc.append({"model": response.model, "input_tokens": inp, "output_tokens": out})
                 except Exception:
                     pass
+                try:
+                    from app.services.archi_config import get_debug_llm_calls
+                    if get_debug_llm_calls():
+                        from app.core.tracing import llm_call_log_var, current_llm_task_var
+                        from app.core.metrics import estimate_cost
+                        log_list = llm_call_log_var.get()
+                        if log_list is not None:
+                            task = current_llm_task_var.get() or "unknown"
+                            msgs = [{"role": m.get("role", ""), "content": (m.get("content") or "")[:4000]} for m in messages]
+                            cost = estimate_cost(response.model, inp, out)
+                            log_list.append({
+                                "task": task,
+                                "messages": msgs,
+                                "response_content": (result.content or "")[:4000],
+                                "model": response.model,
+                                "input_tokens": inp,
+                                "output_tokens": out,
+                                "cost_usd": round(cost, 6),
+                            })
+                except Exception:
+                    pass
                 return result
             except Exception as e:
                 last_error = e

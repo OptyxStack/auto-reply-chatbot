@@ -46,15 +46,22 @@ services:
       # NORMALIZER_DOMAIN_TERMS=vps,dedicated,server,windows,linux,kvm,macos,pricing,plan,plans,nvme,bandwidth,ram,cpu,vds,epyc,xeon,product,order,account,refund
       # NORMALIZER_QUERY_EXPANSION=true
       # NORMALIZER_SLOTS_ENABLED=true
+      # NORMALIZER_SLOT_PRODUCT_TYPES=vps,dedicated,vds  (empty = disabled)
+      # NORMALIZER_SLOT_OS_TYPES=windows,linux,macos  (empty = disabled)
       - NORMALIZER_DOMAIN_TERMS=${NORMALIZER_DOMAIN_TERMS:-}
       - NORMALIZER_QUERY_EXPANSION=${NORMALIZER_QUERY_EXPANSION:-false}
       - NORMALIZER_SLOTS_ENABLED=${NORMALIZER_SLOTS_ENABLED:-false}
+      - NORMALIZER_SLOT_PRODUCT_TYPES=${NORMALIZER_SLOT_PRODUCT_TYPES:-}
+      - NORMALIZER_SLOT_OS_TYPES=${NORMALIZER_SLOT_OS_TYPES:-}
       - OBJECT_STORAGE_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
       - OBJECT_STORAGE_BUCKET=support-ai-docs
 
   worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     image: support-ai-assistant:dev
     volumes:
       - ./:/app
@@ -70,6 +77,8 @@ services:
       - NORMALIZER_DOMAIN_TERMS=${NORMALIZER_DOMAIN_TERMS:-}
       - NORMALIZER_QUERY_EXPANSION=${NORMALIZER_QUERY_EXPANSION:-false}
       - NORMALIZER_SLOTS_ENABLED=${NORMALIZER_SLOTS_ENABLED:-false}
+      - NORMALIZER_SLOT_PRODUCT_TYPES=${NORMALIZER_SLOT_PRODUCT_TYPES:-}
+      - NORMALIZER_SLOT_OS_TYPES=${NORMALIZER_SLOT_OS_TYPES:-}
       - OBJECT_STORAGE_URL=http://minio:9000
       - OBJECT_STORAGE_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
       - OBJECT_STORAGE_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}

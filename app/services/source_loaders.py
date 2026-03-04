@@ -185,13 +185,16 @@ def load_sample_conversations_json(path: Path) -> list[dict[str, Any]]:
 
 LOADERS: dict[str, Any] = {
     "sample_docs.json": load_pages_json,
-    "green_cloud_docs_full.json": load_pages_json,
-    "green_cloud_docs_knowledge.json": load_articles_json,
-    "greencloudvps_advanced_data.json": load_plans_json,
-    "greencloudvps_additional_plans.json": load_plans_json,
-    "greencloudvps_terms_of_service.json": load_pages_json,
-    "greencloud_chatbot_master.json": load_sales_kb_json,
+    "docs_full.json": load_pages_json,
+    "docs_knowledge.json": load_articles_json,
+    "plans_advanced.json": load_plans_json,
+    "plans_additional.json": load_plans_json,
+    "sales_kb.json": load_sales_kb_json,
     "custom_docs.json": load_pages_json,
+    "pricing.json": load_pages_json,
+    "other.json": load_pages_json,
+    "howto.json": load_pages_json,
+    "greencloudvps_terms_of_service.json": load_pages_json,
     "sample_conversations.json": load_sample_conversations_json,
     "tickets.json": load_sample_conversations_json,  # backward compat
 }

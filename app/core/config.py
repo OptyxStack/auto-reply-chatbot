@@ -95,7 +95,12 @@ class Settings(BaseSettings):
         description="Merge strategy: rrf=Reciprocal Rank Fusion (strong), simple=dedupe by chunk_id",
     )
     retrieval_rrf_k: int = Field(default=60, ge=1, le=200, description="RRF constant k (higher = less rank sensitivity)")
-    max_retrieval_attempts: int = Field(default=2, description="Max retrieval attempts before ASK_USER/ESCALATE")
+    max_retrieval_attempts: int = Field(
+        default=3,
+        ge=1,
+        le=5,
+        description="Max retrieval attempts before ASK_USER/ESCALATE. Enterprise default 3 for policy/pricing.",
+    )
     retrieval_profile_engine_enabled: bool = Field(
         default=True,
         description="Workstream 3: Use RetrievalPlan from QuerySpec. Disable to fall back to legacy heuristics.",
@@ -139,6 +144,12 @@ class Settings(BaseSettings):
     rate_limit_requests: int = Field(default=60, description="Requests per window")
     rate_limit_window_seconds: int = Field(default=60, description="Rate limit window")
 
+    # Debug: capture full LLM prompts and responses for flow inspection (normalizer, evidence_quality, generate, etc.)
+    debug_llm_calls: bool = Field(
+        default=False,
+        description="Capture full prompts and responses for each LLM call in flow debug. Set DEBUG_LLM_CALLS=true when debugging.",
+    )
+
     # Pipeline logging (trace all RAG stages for debugging)
     pipeline_logging_enabled: bool = Field(
         default=True,
@@ -174,8 +185,8 @@ class Settings(BaseSettings):
     # Phase 2: Normalizer
     normalizer_enabled: bool = Field(default=True, description="Enable request normalizer (QuerySpec) before retrieval")
     normalizer_use_llm: bool = Field(
-        default=False,
-        description="Use LLM for intent/entities/evidence inference (fallback to rule-based on error)",
+        default=True,
+        description="[Deprecated] Normalizer is LLM-only. Kept for config compatibility.",
     )
     normalizer_llm_model: str = Field(
         default="gpt-4o-mini",
@@ -192,6 +203,14 @@ class Settings(BaseSettings):
     normalizer_slots_enabled: bool = Field(
         default=False,
         description="Config-driven domain override. Enable rule-based slot extraction (product_type, os, billing_cycle, region) for deployment-specific compatibility.",
+    )
+    normalizer_slot_product_types: str = Field(
+        default="",
+        description="Comma-separated product types for slot extraction (e.g. vps,dedicated,plan_a). Empty = disabled.",
+    )
+    normalizer_slot_os_types: str = Field(
+        default="",
+        description="Comma-separated OS types for os slot (e.g. windows,linux,macos). Empty = disabled.",
     )
 
     # Phase 3: Decision Router
@@ -210,6 +229,10 @@ class Settings(BaseSettings):
     evidence_quality_use_llm: bool = Field(
         default=True,
         description="Use LLM for evidence quality gate (flexible, query-aware). When disabled, uses rule-based regex scoring.",
+    )
+    evidence_quality_llm_v2: bool = Field(
+        default=True,
+        description="Use LLM v2 (single pass/fail, partial-evidence aware). When True, overrides evidence_quality_use_llm path.",
     )
 
     # Self-Critic (archi_v3)

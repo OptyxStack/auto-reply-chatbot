@@ -69,7 +69,7 @@ class RetrievalService:
             content = (m.get("content") or "").strip()
             if not content or len(content) > 200:
                 continue
-            if m.get("role") == "user" and len(context_terms) < 3:
+            if m.get("role") == "user":
                 words = [
                     w for w in content.split()
                     if len(w) > 2 and w.lower() not in _STOPWORDS
@@ -85,7 +85,7 @@ class RetrievalService:
                     seen.add(tl)
                     unique.append(t)
             if unique:
-                return f"{' '.join(unique[:3])} {query}".strip()
+                return f"{' '.join(unique)} {query}".strip()
         return query
 
     def _resolve_retrieval_profile(
@@ -169,6 +169,8 @@ class RetrievalService:
 
         if profile == "policy_profile" or "policy_language" in hard_requirements:
             ensure_doc_types.extend(["policy", "tos"])
+            # Product pages (proxies, vps, dedicated) have product-specific policy disclaimers
+            ensure_doc_types.append("pricing")
 
         if profile == "troubleshooting_profile" or "steps_structure" in hard_requirements:
             ensure_doc_types.extend(["howto", "docs", "faq"])
@@ -533,6 +535,11 @@ class RetrievalService:
         evidence = list(evidence_set.chunks)
 
         min_ensure = self._settings.retrieval_ensure_doc_type_min
+        # Policy/troubleshooting profiles: ensure stronger doc_type representation
+        if ensure_doc_types and set(ensure_doc_types) & {"policy", "tos"}:
+            min_ensure = max(min_ensure, 3)
+        elif ensure_doc_types and set(ensure_doc_types) & {"howto", "docs", "faq"}:
+            min_ensure = max(min_ensure, 2)
         if min_ensure > 0 and ensure_doc_types:
             ensure_set = set(ensure_doc_types)
             count_ensure = sum(1 for e in evidence if e.doc_type in ensure_set)
