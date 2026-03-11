@@ -11,19 +11,26 @@ from app.services.schemas import AnswerPlan, DecisionResult, QuerySpec
 
 logger = get_logger(__name__)
 
-# Raw citation patterns leaked by LLM into answer text (chunk_id, source_url) - strip these
+# Raw citation patterns leaked by LLM into answer text - strip these
+# 1. [chunk_id, source_url] format
 _RAW_CITATION_PATTERN = re.compile(
     r"\[\s*[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\s*,\s*"
     r"(?:ticket://[a-f0-9-]+|https?://[^\]]+)\s*\]",
     re.IGNORECASE,
 )
+# 2. Standalone [chunk_id] - chunk IDs in brackets (UUID format)
+_CHUNK_ID_PATTERN = re.compile(
+    r"\[\s*[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\s*\]",
+    re.IGNORECASE,
+)
 
 
 def _sanitize_raw_citations(answer: str) -> str:
-    """Remove raw [chunk_id, source_url] patterns from answer text. Citations belong in the citations array only."""
+    """Remove raw [chunk_id, source_url] and standalone [chunk_id] from answer text. Citations belong in the citations array only."""
     if not answer or not answer.strip():
         return answer
     cleaned = _RAW_CITATION_PATTERN.sub("", answer)
+    cleaned = _CHUNK_ID_PATTERN.sub("", cleaned)
     cleaned = re.sub(r"  +", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -137,7 +144,7 @@ def build_answer_plan(
                     else []
                 ),
                 "bounded_suffix": (
-                    "We've confirmed the details above from our documentation. "
+                    "We've confirmed the details above. "
                     "Some specifics are still unverified."
                 ),
             },

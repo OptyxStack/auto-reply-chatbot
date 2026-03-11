@@ -144,8 +144,9 @@ Guidance (non-binding):
 - fallback_hypotheses: 0-2 alternative hypotheses when the primary evidence family may be wrong or incomplete.
 - skip_retrieval: true when the query is routine and needs no knowledge base (greeting, thanks, bye, simple chitchat). Respond immediately with canned_response.
 - canned_response: when skip_retrieval is true, provide a friendly reply (e.g. greeting "Hello! How can I help you today?").
-- keyword_queries / semantic_queries: focus on the resolved question (1–2 each). Empty when skip_retrieval.
-- retrieval_rewrites: 0–5 short variations for retry. Empty when skip_retrieval.
+- keyword_queries / semantic_queries: focus on the resolved question (1-2 each). Empty when skip_retrieval.
+- retrieval_rewrites: 0-8 short variations for retry. Empty when skip_retrieval.
+- retrieval_rewrites should include variants that match how docs or product pages are usually phrased, not only literal paraphrases. For add-on/capability asks (for example buying extra capacity), include documentation-style variants likely to appear on pricing/product pages (for example: "additional IPs", "IP add-on", "extra IP", "upgrade storage").
 """
 NORMALIZER_SYSTEM_PROMPT = (
     NORMALIZER_SYSTEM_PROMPT
@@ -537,7 +538,7 @@ def _build_rewrite_candidates(
             continue
         seen.add(cl)
         out.append(c)
-    return out[:12]
+    return out[:16]
 
 
 def _apply_config_overrides(
@@ -679,7 +680,7 @@ async def _normalize_llm(
 
         keyword_queries = _as_str_list(payload.get("keyword_queries"), limit=2)
         semantic_queries = _as_str_list(payload.get("semantic_queries"), limit=2)
-        retrieval_rewrites = _as_str_list(payload.get("retrieval_rewrites"), limit=5)
+        retrieval_rewrites = _as_str_list(payload.get("retrieval_rewrites"), limit=8)
 
         skip_retrieval = _as_bool(payload.get("skip_retrieval"), False)
         canned_response = _as_str(payload.get("canned_response"))
@@ -914,3 +915,4 @@ async def normalize(
         return spec
     logger.warning("normalizer_llm_fallback", reason="llm_failed", query_preview=q[:80])
     return _build_minimal_fallback(q, source_lang)
+

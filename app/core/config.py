@@ -82,8 +82,11 @@ class Settings(BaseSettings):
     cohere_api_key: str = Field(default="", description="Cohere API key for reranker")
 
     # Retrieval
-    retrieval_top_n: int = Field(default=50, description="Top N from each source (OpenSearch + Qdrant)")
-    retrieval_top_k: int = Field(default=8, description="Top K after reranking (higher = more context)")
+    retrieval_top_n: int = Field(
+        default=100,
+        description="Top N candidates fetched per source (BM25 and vector) before merge/rerank.",
+    )
+    retrieval_top_k: int = Field(default=12, description="Top K after reranking (higher = more context)")
     retrieval_plans_extra_chunks: int = Field(default=4, description="Extra chunks for plans/pricing queries")
     # Intent-aware fetch: when query matches plans/price, also fetch from these doc_types (comma-separated)
     retrieval_plans_fetch_doc_types: str = Field(
@@ -100,11 +103,53 @@ class Settings(BaseSettings):
         le=10,
         description="Ensure at least N chunks from plans_fetch_doc_types in final evidence (diversity). 0=disabled.",
     )
+    retrieval_conversation_score_penalty: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description="Multiply conversation chunk scores by this (0.55 = 45%% penalty). Prefer docs; use conversation when docs lack ideal chunks.",
+    )
     retrieval_fusion: Literal["rrf", "simple"] = Field(
         default="rrf",
         description="Merge strategy: rrf=Reciprocal Rank Fusion (strong), simple=dedupe by chunk_id",
     )
     retrieval_rrf_k: int = Field(default=60, ge=1, le=200, description="RRF constant k (higher = less rank sensitivity)")
+    retrieval_opensearch_timeout_seconds: float = Field(
+        default=6.0,
+        ge=0.1,
+        le=60.0,
+        description="Timeout per OpenSearch retrieval call in seconds.",
+    )
+    retrieval_qdrant_timeout_seconds: float = Field(
+        default=6.0,
+        ge=0.1,
+        le=60.0,
+        description="Timeout per Qdrant retrieval call in seconds.",
+    )
+    retrieval_embedding_timeout_seconds: float = Field(
+        default=8.0,
+        ge=0.1,
+        le=60.0,
+        description="Timeout for embedding semantic query before vector search fan-out.",
+    )
+    retrieval_opensearch_max_concurrency: int = Field(
+        default=24,
+        ge=1,
+        le=200,
+        description="Semaphore limit for in-flight OpenSearch retrieval calls per process.",
+    )
+    retrieval_qdrant_max_concurrency: int = Field(
+        default=24,
+        ge=1,
+        le=200,
+        description="Semaphore limit for in-flight Qdrant retrieval calls per process.",
+    )
+    retrieval_embedding_max_concurrency: int = Field(
+        default=24,
+        ge=1,
+        le=200,
+        description="Semaphore limit for in-flight embedding calls per process.",
+    )
     max_retrieval_attempts: int = Field(
         default=3,
         ge=1,

@@ -41,6 +41,19 @@ class QueryRewrite:
     retrieval_profile: str | None = None  # From LLM rewriter when QuerySpec absent
 
 
+@dataclass
+class _Bm25Bundle:
+    primary: list[SearchChunk] = field(default_factory=list)
+    extra: list[SearchChunk] = field(default_factory=list)
+    supporting: list[SearchChunk] = field(default_factory=list)
+
+
+@dataclass
+class _VectorBundle:
+    primary: list[SearchChunk] = field(default_factory=list)
+    supporting: list[SearchChunk] = field(default_factory=list)
+
+
 class RetrievalService:
     """Hybrid retrieval with query rewrite, merge, and rerank."""
 
@@ -56,6 +69,103 @@ class RetrievalService:
         self._qdrant = qdrant or QdrantSearchClient()
         self._embedder = embedding_provider or get_embedding_provider()
         self._reranker = reranker or get_reranker_provider()
+        self._opensearch_timeout_s = self._float_setting("retrieval_opensearch_timeout_seconds", 6.0)
+        self._qdrant_timeout_s = self._float_setting("retrieval_qdrant_timeout_seconds", 6.0)
+        self._embedding_timeout_s = self._float_setting("retrieval_embedding_timeout_seconds", 8.0)
+        self._opensearch_semaphore = asyncio.Semaphore(
+            self._int_setting("retrieval_opensearch_max_concurrency", 24)
+        )
+        self._qdrant_semaphore = asyncio.Semaphore(
+            self._int_setting("retrieval_qdrant_max_concurrency", 24)
+        )
+        self._embedding_semaphore = asyncio.Semaphore(
+            self._int_setting("retrieval_embedding_max_concurrency", 24)
+        )
+
+    def _int_setting(self, name: str, default: int) -> int:
+        try:
+            value = int(getattr(self._settings, name, default))
+        except (TypeError, ValueError):
+            return default
+        return max(1, value)
+
+    def _float_setting(self, name: str, default: float) -> float:
+        try:
+            value = float(getattr(self._settings, name, default))
+        except (TypeError, ValueError):
+            return default
+        return max(0.1, value)
+
+    async def _search_opensearch_safe(
+        self,
+        *,
+        query: str,
+        top_n: int,
+        doc_types: list[str] | None,
+        boost_pricing: bool,
+    ) -> list[SearchChunk]:
+        try:
+            async with self._opensearch_semaphore:
+                return await asyncio.wait_for(
+                    self._opensearch.search(
+                        query=query,
+                        top_n=top_n,
+                        doc_types=doc_types,
+                        boost_pricing=boost_pricing,
+                        prefer_snippet=False,
+                    ),
+                    timeout=self._opensearch_timeout_s,
+                )
+        except Exception as exc:
+            logger.warning(
+                "retrieval_opensearch_fallback_empty",
+                error=str(exc),
+                top_n=top_n,
+                doc_types=doc_types or [],
+            )
+            return []
+
+    async def _search_qdrant_safe(
+        self,
+        *,
+        vector: list[float],
+        top_n: int,
+        doc_types: list[str] | None,
+    ) -> list[SearchChunk]:
+        try:
+            async with self._qdrant_semaphore:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(
+                        self._qdrant.search,
+                        vector=vector,
+                        top_n=top_n,
+                        doc_types=doc_types,
+                    ),
+                    timeout=self._qdrant_timeout_s,
+                )
+        except Exception as exc:
+            logger.warning(
+                "retrieval_qdrant_fallback_empty",
+                error=str(exc),
+                top_n=top_n,
+                doc_types=doc_types or [],
+            )
+            return []
+
+    async def _embed_query_safe(self, semantic_query: str) -> list[float] | None:
+        try:
+            async with self._embedding_semaphore:
+                vectors = await asyncio.wait_for(
+                    self._embedder.embed([semantic_query]),
+                    timeout=self._embedding_timeout_s,
+                )
+        except Exception as exc:
+            logger.warning("retrieval_embedding_fallback_empty", error=str(exc))
+            return None
+        if not vectors or not vectors[0]:
+            logger.warning("retrieval_embedding_empty_vector")
+            return None
+        return vectors[0]
 
     def _merge_simple(
         self,
@@ -213,6 +323,172 @@ class RetrievalService:
         remove_idx = min(non_conversation, key=lambda entry: entry[1][1])[0]
         return [item for idx, item in enumerate(updated) if idx != remove_idx][:max_items]
 
+    async def _gather_chunk_tasks(
+        self,
+        tasks: dict[str, asyncio.Task[list[SearchChunk]]],
+        *,
+        stage: str,
+    ) -> dict[str, list[SearchChunk]]:
+        if not tasks:
+            return {}
+        names = list(tasks.keys())
+        results = await asyncio.gather(*(tasks[name] for name in names), return_exceptions=True)
+        out: dict[str, list[SearchChunk]] = {}
+        for name, result in zip(names, results):
+            if isinstance(result, Exception):
+                logger.warning(
+                    "retrieval_parallel_task_failed",
+                    stage=stage,
+                    task=name,
+                    error=str(result),
+                )
+                out[name] = []
+                continue
+            out[name] = result
+        return out
+
+    async def _fetch_bm25_bundle(
+        self,
+        *,
+        keyword_query: str,
+        fetch_n: int,
+        primary_doc_types: list[str] | None,
+        authoritative_doc_types: list[str],
+        supporting_doc_types: list[str],
+        ensure_doc_types: list[str],
+        boost_pricing: bool,
+    ) -> _Bm25Bundle:
+        supporting_fetch_n = max(8, min(fetch_n // 2, 20))
+        tasks: dict[str, asyncio.Task[list[SearchChunk]]] = {
+            "primary": asyncio.create_task(
+                self._search_opensearch_safe(
+                    query=keyword_query,
+                    top_n=fetch_n,
+                    doc_types=authoritative_doc_types or primary_doc_types,
+                    boost_pricing=boost_pricing,
+                )
+            )
+        }
+        if ensure_doc_types:
+            tasks["extra"] = asyncio.create_task(
+                self._search_opensearch_safe(
+                    query=keyword_query,
+                    top_n=20,
+                    doc_types=ensure_doc_types,
+                    boost_pricing=True,
+                )
+            )
+        if supporting_doc_types and supporting_doc_types != authoritative_doc_types:
+            tasks["supporting"] = asyncio.create_task(
+                self._search_opensearch_safe(
+                    query=keyword_query,
+                    top_n=supporting_fetch_n,
+                    doc_types=supporting_doc_types,
+                    boost_pricing=False,
+                )
+            )
+
+        results = await self._gather_chunk_tasks(tasks, stage="bm25")
+        return _Bm25Bundle(
+            primary=results.get("primary", []),
+            extra=results.get("extra", []),
+            supporting=results.get("supporting", []),
+        )
+
+    async def _fetch_vector_bundle(
+        self,
+        *,
+        vector: list[float] | None,
+        fetch_n: int,
+        primary_doc_types: list[str] | None,
+        authoritative_doc_types: list[str],
+        supporting_doc_types: list[str],
+    ) -> _VectorBundle:
+        if not vector:
+            return _VectorBundle()
+
+        supporting_fetch_n = max(8, min(fetch_n // 2, 20))
+        tasks: dict[str, asyncio.Task[list[SearchChunk]]] = {
+            "primary": asyncio.create_task(
+                self._search_qdrant_safe(
+                    vector=vector,
+                    top_n=fetch_n,
+                    doc_types=authoritative_doc_types or primary_doc_types,
+                )
+            )
+        }
+        if supporting_doc_types and supporting_doc_types != authoritative_doc_types:
+            tasks["supporting"] = asyncio.create_task(
+                self._search_qdrant_safe(
+                    vector=vector,
+                    top_n=supporting_fetch_n,
+                    doc_types=supporting_doc_types,
+                )
+            )
+
+        results = await self._gather_chunk_tasks(tasks, stage="vector")
+        return _VectorBundle(
+            primary=results.get("primary", []),
+            supporting=results.get("supporting", []),
+        )
+
+    async def _fetch_parallel_candidates(
+        self,
+        *,
+        qr: QueryRewrite,
+        fetch_n: int,
+        primary_doc_types: list[str] | None,
+        authoritative_doc_types: list[str],
+        supporting_doc_types: list[str],
+        ensure_doc_types: list[str],
+        boost_pricing: bool,
+    ) -> tuple[_Bm25Bundle, _VectorBundle]:
+        bm25_bundle_task = asyncio.create_task(
+            self._fetch_bm25_bundle(
+                keyword_query=qr.keyword_query,
+                fetch_n=fetch_n,
+                primary_doc_types=primary_doc_types,
+                authoritative_doc_types=authoritative_doc_types,
+                supporting_doc_types=supporting_doc_types,
+                ensure_doc_types=ensure_doc_types,
+                boost_pricing=boost_pricing,
+            )
+        )
+        embed_task = asyncio.create_task(self._embed_query_safe(qr.semantic_query))
+
+        vector: list[float] | None = None
+        try:
+            vector = await embed_task
+        except Exception as exc:
+            logger.warning("retrieval_embedding_task_failed", error=str(exc))
+
+        vector_bundle_task: asyncio.Task[_VectorBundle] | None = None
+        if vector:
+            vector_bundle_task = asyncio.create_task(
+                self._fetch_vector_bundle(
+                    vector=vector,
+                    fetch_n=fetch_n,
+                    primary_doc_types=primary_doc_types,
+                    authoritative_doc_types=authoritative_doc_types,
+                    supporting_doc_types=supporting_doc_types,
+                )
+            )
+
+        bm25_bundle = _Bm25Bundle()
+        try:
+            bm25_bundle = await bm25_bundle_task
+        except Exception as exc:
+            logger.warning("retrieval_bm25_bundle_failed", error=str(exc))
+
+        vector_bundle = _VectorBundle()
+        if vector_bundle_task is not None:
+            try:
+                vector_bundle = await vector_bundle_task
+            except Exception as exc:
+                logger.warning("retrieval_vector_bundle_failed", error=str(exc))
+
+        return bm25_bundle, vector_bundle
+
     async def retrieve(
         self,
         query: str,
@@ -299,51 +575,25 @@ class RetrievalService:
             if str(x).strip()
         ]
 
-        bm25_chunks = await self._opensearch.search(
-            query=qr.keyword_query,
-            top_n=fetch_n,
-            doc_types=authoritative_doc_types or primary_doc_types,
+        bm25_bundle, vector_bundle = await self._fetch_parallel_candidates(
+            qr=qr,
+            fetch_n=fetch_n,
+            primary_doc_types=primary_doc_types,
+            authoritative_doc_types=authoritative_doc_types,
+            supporting_doc_types=supporting_doc_types,
+            ensure_doc_types=ensure_doc_types,
             boost_pricing=is_pricing_retrieval or bool(retry_strategy and retry_strategy.boost_patterns),
-            prefer_snippet=False,
         )
+        bm25_chunks = bm25_bundle.primary
+        extra_bm25 = bm25_bundle.extra
+        supporting_bm25 = bm25_bundle.supporting
+        vector_chunks = vector_bundle.primary
+        supporting_vector = vector_bundle.supporting
+
         bm25_ids = {c.chunk_id for c in bm25_chunks}
-
-        extra_bm25: list[SearchChunk] = []
-        if ensure_doc_types:
-            extra_bm25 = await self._opensearch.search(
-                query=qr.keyword_query,
-                top_n=20,
-                doc_types=ensure_doc_types,
-                boost_pricing=True,
-                prefer_snippet=False,
-            )
-        extra_ids = {c.chunk_id for c in extra_bm25}
-
-        vectors = await self._embedder.embed([qr.semantic_query])
-        vector_chunks = await asyncio.to_thread(
-            self._qdrant.search,
-            vector=vectors[0],
-            top_n=fetch_n,
-            doc_types=authoritative_doc_types or primary_doc_types,
-        )
         vector_ids = {c.chunk_id for c in vector_chunks}
-
-        supporting_bm25: list[SearchChunk] = []
-        supporting_vector: list[SearchChunk] = []
+        extra_ids = {c.chunk_id for c in extra_bm25}
         if supporting_doc_types and supporting_doc_types != authoritative_doc_types:
-            supporting_bm25 = await self._opensearch.search(
-                query=qr.keyword_query,
-                top_n=max(8, min(fetch_n // 2, 20)),
-                doc_types=supporting_doc_types,
-                boost_pricing=False,
-                prefer_snippet=False,
-            )
-            supporting_vector = await asyncio.to_thread(
-                self._qdrant.search,
-                vector=vectors[0],
-                top_n=max(8, min(fetch_n // 2, 20)),
-                doc_types=supporting_doc_types,
-            )
             extra_ids.update(c.chunk_id for c in supporting_bm25 + supporting_vector)
 
         if self._settings.retrieval_fusion == "rrf":
@@ -440,6 +690,14 @@ class RetrievalService:
         )
 
         reranked_search: list[tuple[SearchChunk, float]] = list(reranked)
+        # Deprioritize conversation chunks: prefer docs; use conversation when docs lack ideal chunks
+        penalty = getattr(self._settings, "retrieval_conversation_score_penalty", 1.0)
+        if penalty < 1.0:
+            reranked_search = [
+                (c, (s * penalty) if (c.doc_type or "").lower() == "conversation" else s)
+                for c, s in reranked_search
+            ]
+            reranked_search = sorted(reranked_search, key=lambda x: x[1], reverse=True)
         if retry_strategy and retry_strategy.exclude_patterns:
             exclude_re = re.compile(
                 "|".join(re.escape(p) for p in retry_strategy.exclude_patterns),

@@ -44,18 +44,16 @@ def _build_ask_user_evidence_gap(
     if partial_links:
         links = "\n".join(f"- {url}" for url in partial_links[:3])
         return (
-            "We couldn't verify enough details from our documentation.\n"
+            "We couldn't find enough information to answer fully.\n"
             f"You can check these related pages:\n{links}\n"
             "If you want, rephrase your question with the exact detail you need."
         )
 
-    missing = list((quality_report.missing_signals if quality_report else []) or [])
-    if not missing:
-        return "We couldn't verify enough details from our documentation. Could you rephrase your question?"
+    if not (quality_report and quality_report.missing_signals):
+        return "We couldn't find enough information to answer fully. Could you rephrase your question?"
     return (
-        "We couldn't verify enough details from our documentation. "
-        f"Missing signals: {', '.join(missing[:3])}. "
-        "Could you rephrase your question?"
+        "We couldn't find enough information to answer fully. "
+        "Could you rephrase your question or provide more details?"
     )
 
 

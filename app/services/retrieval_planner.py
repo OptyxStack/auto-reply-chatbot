@@ -258,10 +258,13 @@ def _derive_lane_doc_types(
     *,
     active_hypothesis: HypothesisSpec | None,
     preferred_doc_types: list[str],
+    add_tos_for_pricing: bool = False,
 ) -> tuple[list[str], list[str]]:
     all_doc_types = _sanitize_doc_type_list(
         (active_hypothesis.doc_type_prior if active_hypothesis and active_hypothesis.doc_type_prior else preferred_doc_types)
     )
+    if add_tos_for_pricing and "tos" not in {d.lower() for d in all_doc_types}:
+        all_doc_types = list(all_doc_types) + ["tos"]
     authoritative = [d for d in all_doc_types if d in _AUTHORITATIVE_DOC_TYPES]
     supporting = [d for d in all_doc_types if d in _SUPPORTING_DOC_TYPES]
     if not authoritative:
@@ -341,6 +344,10 @@ def _derive_doc_types(
         retry_doc_types = _normalize_str_list(retry_strategy.filter_doc_types)
         preferred = list(dict.fromkeys(retry_doc_types + preferred))
 
+    # ToS often contains add-on pricing (IP, bandwidth, storage). Include for pricing_profile.
+    if (profile == "pricing_profile" or is_pricing) and "tos" not in {p.lower() for p in preferred}:
+        preferred.append("tos")
+
     return list(dict.fromkeys(preferred)), excluded
 
 
@@ -385,6 +392,7 @@ def _build_plan_from_inputs(
     authoritative_doc_types, supporting_doc_types = _derive_lane_doc_types(
         active_hypothesis=active_hypothesis,
         preferred_doc_types=preferred_doc_types,
+        add_tos_for_pricing=profile == "pricing_profile",
     )
     active_required = _normalize_str_list(
         (

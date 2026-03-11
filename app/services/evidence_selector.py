@@ -23,8 +23,9 @@ EVIDENCE_SELECTOR_PROMPT = """You select evidence chunks for a support RAG syste
 Given a query, candidate chunks (with IDs), and required evidence types, select chunks that:
 1. Covers all required_evidence when possible (numbers, links, policy, steps)
 2. Maximizes relevance to the query
-3. Prefer diverse doc_types and diverse plans/products (avoid over-concentrating on one plan type)
-4. Preserve at least one relevant conversation chunk when it provides a useful prior support example or capability signal
+3. Prefer docs (pricing, policy, howto, faq) over conversation when both exist and docs cover the requirement. Use conversation only when docs lack ideal chunks.
+4. Prefer diverse doc_types and diverse plans/products (avoid over-concentrating on one plan type)
+5. Preserve at most one relevant conversation chunk when docs do not sufficiently answer the query
 
 Required evidence types:
 - numbers_units: price, cost, specs with numbers
@@ -45,7 +46,7 @@ Rules:
 - coverage_map: requirement -> chunk_id that best satisfies it (optional, can be partial)
 - uncovered_requirements: requirements no chunk satisfies
 - Prefer diversity across doc_types and plan/product lines when candidates show multiple options. Do not treat different plans as redundant.
-- If a conversation chunk is materially relevant to the query, keep at least one such chunk alongside standard docs when possible.
+- Prefer docs over conversation. Add conversation only when docs lack ideal coverage.
 - Select 6-12 chunks based on query complexity and how many distinct options candidates offer.
 - Only use chunk IDs from the candidate list. Do not invent IDs."""
 

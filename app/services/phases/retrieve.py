@@ -1,5 +1,6 @@
 """RETRIEVE phase: hybrid retrieval with evidence hygiene."""
 
+import asyncio
 from typing import Any
 
 from app.services.evidence_hygiene import compute_hygiene
@@ -92,14 +93,46 @@ async def execute_retrieve(
     )
 
     if evidence:
+        eval_task = None
         if get_evidence_evaluator_enabled():
-            ctx.extra["evidence_eval_result"] = await evaluate_evidence(
-                ctx.effective_query,
-                ctx.query_spec,
-                evidence,
-                top_n=5,
+            eval_task = asyncio.create_task(
+                evaluate_evidence(
+                    ctx.effective_query,
+                    ctx.query_spec,
+                    evidence,
+                    top_n=5,
+                )
             )
-        hygiene = compute_hygiene(evidence)
+        hygiene_task = asyncio.create_task(asyncio.to_thread(compute_hygiene, evidence))
+
+        if eval_task is not None:
+            eval_result, hygiene_result = await asyncio.gather(
+                eval_task,
+                hygiene_task,
+                return_exceptions=True,
+            )
+            if not isinstance(eval_result, Exception):
+                ctx.extra["evidence_eval_result"] = eval_result
+            else:
+                _pipeline_log(
+                    "retrieve",
+                    "evidence_eval_failed",
+                    error=str(eval_result),
+                    trace_id=ctx.trace_id,
+                )
+        else:
+            hygiene_result = await hygiene_task
+
+        if isinstance(hygiene_result, Exception):
+            _pipeline_log(
+                "retrieve",
+                "hygiene_failed",
+                error=str(hygiene_result),
+                trace_id=ctx.trace_id,
+            )
+            hygiene = compute_hygiene(evidence)
+        else:
+            hygiene = hygiene_result
         if evidence_pack.retrieval_stats:
             evidence_pack.retrieval_stats["evidence_signatures"] = {
                 "pct_chunks_with_url": round(hygiene.pct_chunks_with_url, 1),
