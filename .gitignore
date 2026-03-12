@@ -22,3 +22,5 @@ build/
 
 # Debug/test output
 app/services/hn.html
+artifacts/
+scripts/e.html

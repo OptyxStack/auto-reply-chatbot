@@ -111,6 +111,34 @@ class Settings(BaseSettings):
         le=10,
         description="Ensure at least N chunks from plans_fetch_doc_types in final evidence (diversity). 0=disabled.",
     )
+    retrieval_diversity_enabled: bool = Field(
+        default=True,
+        description="Enable diversity fan-out retrieval across configured doc types.",
+    )
+    retrieval_diversity_doc_types: str = Field(
+        default="howto,docs,faq,conversation",
+        description="Comma-separated doc types used for diversity fan-out retrieval.",
+    )
+    retrieval_diversity_max_doc_types: int = Field(
+        default=4,
+        ge=1,
+        le=10,
+        description="Maximum number of diversity doc types used per retrieval attempt.",
+    )
+    retrieval_diversity_fetch_per_type: int = Field(
+        default=6,
+        ge=1,
+        le=20,
+        description="Number of chunks to fetch per diversity doc type.",
+    )
+    retrieval_page_kind_weighting_enabled: bool = Field(
+        default=True,
+        description="Enable answer-type-aware page_kind/product_family score calibration.",
+    )
+    page_kind_filter_enabled: bool = Field(
+        default=False,
+        description="Phase 6 rollout flag for page_kind/product_family retrieval filtering. Enable after re-ingest with page_kind.",
+    )
     retrieval_conversation_score_penalty: float = Field(
         default=0.55,
         ge=0.0,
@@ -208,6 +236,12 @@ class Settings(BaseSettings):
         description="Attach parent section references in chunk metadata for optional parent expansion.",
     )
 
+    # Reviewer / calibration policy
+    exact_answer_types: list[str] = Field(
+        default=["direct_link", "pricing", "policy"],
+        description="Answer types treated as exact tasks by router/verifier calibration.",
+    )
+
     # Reviewer / claim parser policy patterns
     reviewer_high_risk_patterns: list[str] = Field(
         default=[
@@ -220,8 +254,8 @@ class Settings(BaseSettings):
         description="Regex patterns for high-risk query detection in reviewer gate.",
     )
     reviewer_policy_doc_types: list[str] = Field(
-        default=["policy", "tos"],
-        description="Doc types accepted as policy citations in reviewer gate.",
+        default=["policy", "tos", "faq", "howto"],
+        description="Doc types accepted as policy citations in reviewer gate. FAQ/howto included when official docs contain policy summaries (refund, cancel, etc.).",
     )
     reviewer_policy_claim_patterns: list[str] = Field(
         default=[
@@ -289,14 +323,34 @@ class Settings(BaseSettings):
         description="Max chars per message content in conversation context (normalizer, query_rewriter prompts).",
     )
 
-    # Fallback when evidence gate fails but LLM may still answer (PASS_LLM_DECIDES)
+    # Legacy fallback knobs (kept for backward compatibility with existing env files)
     fallback_llm_decides_enabled: bool = Field(
         default=True,
-        description="When evidence gate fails but evidence exists, let LLM try to answer. If False, always ASK_USER.",
+        description="[Deprecated] Legacy fallback switch. Runtime no longer uses PASS_LLM_DECIDES lane.",
     )
     fallback_contact_support_message: str = Field(
         default="Please contact our support team for assistance.",
         description="Message when LLM cannot answer from partial evidence. Configurable for localization.",
+    )
+
+    # Conversation history relevance check (before generate)
+    conversation_relevance_check_enabled: bool = Field(
+        default=True,
+        description="Check if conversation history is relevant to current query before generate. If not, omit history to avoid context priming.",
+    )
+    conversation_relevance_check_model: str | None = Field(
+        default=None,
+        description="Model for relevance check. Empty = use economy model. Prefer small/fast model.",
+    )
+    conversation_relevance_check_max_history_turns: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description="Max conversation turns to send to relevance check LLM.",
+    )
+    prior_citations_injection_enabled: bool = Field(
+        default=True,
+        description="When user asks for 'page link'/'that link' and conversation is relevant, inject prior assistant URLs as evidence so the model can cite them.",
     )
 
     # Rate limiting
@@ -465,6 +519,26 @@ class Settings(BaseSettings):
     claim_level_review_enabled: bool = Field(
         default=True,
         description="Enable claim-level trim and lane downgrade instead of full rejection",
+    )
+
+    # Phase 6: Soft-contract rollout controls
+    soft_contract_enabled: bool = Field(
+        default=True,
+        description="Enable answer-mode soft-contract calibration flow end-to-end.",
+    )
+    answer_candidate_enabled: bool = Field(
+        default=True,
+        description="Enable AnswerCandidate JSON path and post-calibration rendering.",
+    )
+    targeted_retry_enabled: bool = Field(
+        default=True,
+        description="Enable targeted one-shot retry based on verifier fail reason.",
+    )
+    soft_contract_shadow_percent: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Shadow traffic percent for soft-contract monitoring when full enablement is staged.",
     )
 
     # Final Polish (archi_v3)
