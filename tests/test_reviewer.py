@@ -2,6 +2,7 @@
 
 import pytest
 
+from app.search.base import EvidenceChunk
 from app.services.reviewer import ReviewerGate, ReviewerStatus
 
 
@@ -53,13 +54,13 @@ def test_reviewer_fail_citation_not_in_evidence(mock_evidence_chunks):
 
 
 def test_reviewer_high_risk_requires_policy(mock_evidence_chunks):
-    """High-risk query (refund) without policy citation should ESCALATE."""
+    """High-risk query (refund) without policy/tos/faq/howto citation should ESCALATE."""
     gate = ReviewerGate(require_policy_for_high_risk=True)
     result = gate.review(
         decision="PASS",
         answer="You may get a refund.",
         citations=[
-            {"chunk_id": "chunk-2", "source_url": "https://example.com/billing", "doc_type": "faq"},
+            {"chunk_id": "chunk-4", "source_url": "https://example.com/pricing", "doc_type": "pricing"},
         ],
         evidence=mock_evidence_chunks,
         query="I want a refund",
@@ -67,6 +68,40 @@ def test_reviewer_high_risk_requires_policy(mock_evidence_chunks):
     )
     assert result.status == ReviewerStatus.ESCALATE
     assert "policy" in result.reasons[0].lower()
+
+
+def test_reviewer_high_risk_with_howto_policy_citation_passes(mock_evidence_chunks):
+    """High-risk query (refund) with howto citation (FAQ/docs with policy content) should pass reviewer."""
+    gate = ReviewerGate(require_policy_for_high_risk=True)
+    result = gate.review(
+        decision="PASS",
+        answer="Yes—refunds are available for the first VPS within 7 days.",
+        citations=[
+            {"chunk_id": "chunk-3", "source_url": "https://example.com/howto/refund", "doc_type": "howto"},
+        ],
+        evidence=mock_evidence_chunks,
+        query="can i refund",
+        confidence=0.9,
+    )
+    assert result.status == ReviewerStatus.PASS
+    assert not result.reasons
+
+
+def test_reviewer_high_risk_with_faq_policy_citation_passes(mock_evidence_chunks):
+    """High-risk query (refund) with faq citation (policy summary) should pass reviewer."""
+    gate = ReviewerGate(require_policy_for_high_risk=True)
+    result = gate.review(
+        decision="PASS",
+        answer="Yes—GreenCloud offers refunds for the first VPS of fresh clients within 7 days.",
+        citations=[
+            {"chunk_id": "chunk-2", "source_url": "https://example.com/billing", "doc_type": "faq"},
+        ],
+        evidence=mock_evidence_chunks,
+        query="can i refund",
+        confidence=0.9,
+    )
+    assert result.status == ReviewerStatus.PASS
+    assert not result.reasons
 
 
 def test_reviewer_legacy_retrieve_more_input_becomes_ask_user(mock_evidence_chunks):
@@ -86,8 +121,8 @@ def test_reviewer_legacy_retrieve_more_input_becomes_ask_user(mock_evidence_chun
     assert "defaulting to ASK_USER" in result.reasons[0]
 
 
-def test_reviewer_allows_bounded_pass_weak_with_single_citation(mock_evidence_chunks):
-    """Bounded PASS_WEAK answers should not be forced into RETRIEVE_MORE by 2-citation heuristics."""
+def test_reviewer_allows_bounded_pass_partial_with_single_citation(mock_evidence_chunks):
+    """Bounded PASS_PARTIAL answers should not be forced into RETRIEVE_MORE by 2-citation heuristics."""
     gate = ReviewerGate()
     result = gate.review(
         decision="PASS",
@@ -99,7 +134,7 @@ def test_reviewer_allows_bounded_pass_weak_with_single_citation(mock_evidence_ch
         query="What is the price?",
         confidence=0.6,
         answer_policy="bounded",
-        lane="PASS_WEAK",
+        lane="PASS_PARTIAL",
     )
     assert result.status == ReviewerStatus.PASS
     assert not result.reasons
@@ -138,6 +173,133 @@ def test_reviewer_downgrade_lane_when_bounded_and_low_coverage(mock_evidence_chu
         query="support",
         confidence=0.6,
         answer_policy="bounded",
-        lane="PASS_WEAK",
+        lane="PASS_PARTIAL",
     )
     assert result.status in (ReviewerStatus.PASS, ReviewerStatus.DOWNGRADE_LANE)
+
+
+def test_reviewer_partial_requires_disclaimer_and_injects_default(mock_evidence_chunks):
+    gate = ReviewerGate()
+    result = gate.review(
+        decision="PASS",
+        answer="Support is available for this request.",
+        citations=[
+            {"chunk_id": "chunk-2", "source_url": "https://example.com/billing", "doc_type": "faq"},
+        ],
+        evidence=mock_evidence_chunks,
+        query="support",
+        confidence=0.7,
+        answer_policy="bounded",
+        lane="PASS_PARTIAL",
+        answer_candidate={
+            "answer_mode": "PASS_PARTIAL",
+            "support_level": "partial",
+            "disclaimers": [],
+        },
+    )
+    assert result.status == ReviewerStatus.DOWNGRADE_LANE
+    assert result.final_lane == "PASS_PARTIAL"
+    assert result.trimmed_answer is not None
+    assert "best we have" in result.trimmed_answer.lower() or "best available" in result.trimmed_answer.lower()
+
+
+def test_reviewer_exact_mismatch_with_disclaimer_downgrades_to_partial(mock_evidence_chunks):
+    gate = ReviewerGate()
+    result = gate.review(
+        decision="PASS",
+        answer=(
+            "I could not verify the exact order page. "
+            "The closest related official page is https://example.com/billing."
+        ),
+        citations=[
+            {"chunk_id": "chunk-2", "source_url": "https://example.com/billing", "doc_type": "faq"},
+        ],
+        evidence=mock_evidence_chunks,
+        query="windows vps order link",
+        confidence=0.88,
+        expected_answer_type="direct_link",
+        acceptable_related_types=["pricing", "general"],
+        answer_expectation="exact",
+        answer_candidate={
+            "answer_type": "general",
+            "answer_mode": "PASS_PARTIAL",
+            "support_level": "partial",
+            "disclaimers": ["closest related official page"],
+        },
+    )
+    assert result.status == ReviewerStatus.DOWNGRADE_LANE
+    assert result.final_lane == "PASS_PARTIAL"
+    assert result.calibrated_confidence is not None
+    assert result.calibrated_confidence <= 0.6
+
+
+def test_reviewer_exact_mismatch_overclaim_asks_user(mock_evidence_chunks):
+    gate = ReviewerGate()
+    result = gate.review(
+        decision="PASS",
+        answer="Here is the official order link: https://example.com/billing",
+        citations=[
+            {"chunk_id": "chunk-2", "source_url": "https://example.com/billing", "doc_type": "faq"},
+        ],
+        evidence=mock_evidence_chunks,
+        query="windows vps order link",
+        confidence=0.9,
+        expected_answer_type="direct_link",
+        acceptable_related_types=["pricing", "general"],
+        answer_expectation="exact",
+        target_entity="windows_vps",
+        answer_candidate={
+            "answer_type": "general",
+            "answer_mode": "PASS_EXACT",
+            "support_level": "strong",
+            "disclaimers": [],
+        },
+    )
+    assert result.status == ReviewerStatus.ASK_USER
+    assert any("overclaim" in reason.lower() or "mismatch" in reason.lower() for reason in result.reasons)
+    assert result.final_lane == "ASK_USER"
+    assert result.retry_reason == "overclaim"
+    assert result.suggested_queries
+    assert "windows vps order page" in result.suggested_queries[0].lower()
+    assert result.calibrated_confidence is not None
+    assert result.calibrated_confidence <= 0.3
+
+
+def test_reviewer_exact_supported_passes_exact_and_caps_confidence():
+    gate = ReviewerGate()
+    evidence = [
+        EvidenceChunk(
+            chunk_id="chunk-order-1",
+            snippet="Order page for Windows VPS.",
+            source_url="https://example.com/order/windows-vps",
+            doc_type="pricing",
+            score=0.95,
+        ),
+    ]
+    result = gate.review(
+        decision="PASS",
+        answer="Official order page: https://example.com/order/windows-vps",
+        citations=[
+            {
+                "chunk_id": "chunk-order-1",
+                "source_url": "https://example.com/order/windows-vps",
+                "doc_type": "pricing",
+            },
+        ],
+        evidence=evidence,
+        query="windows vps order link",
+        confidence=0.99,
+        expected_answer_type="direct_link",
+        acceptable_related_types=["pricing"],
+        answer_expectation="exact",
+        answer_candidate={
+            "answer_type": "direct_link",
+            "answer_mode": "PASS_EXACT",
+            "support_level": "strong",
+            "disclaimers": [],
+        },
+    )
+    assert result.status == ReviewerStatus.PASS
+    assert result.final_lane == "PASS_EXACT"
+    assert result.calibrated_confidence is not None
+    assert result.calibrated_confidence <= 0.92

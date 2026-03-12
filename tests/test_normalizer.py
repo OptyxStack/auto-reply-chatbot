@@ -56,6 +56,41 @@ async def test_normalize_uses_authoritative_retrieval_fields(mock_get_gateway):
     assert spec.hard_requirements == ["policy_language"]
     assert spec.soft_requirements == ["has_any_url"]
     assert spec.doc_type_prior == ["policy", "tos"]
+    assert spec.answer_type == "policy"
+    assert spec.answer_expectation == "exact"
+    assert spec.answer_mode == "PASS_EXACT"
+    assert spec.support_level in {"strong", "partial"}
+
+
+@patch("app.services.normalizer.get_llm_gateway")
+@pytest.mark.asyncio
+async def test_normalize_exact_tasks_override_conflicting_retrieval_hints(mock_get_gateway):
+    mock_gateway = MagicMock()
+    mock_gateway.chat = AsyncMock(
+        return_value=_mock_llm_response({
+            "canonical_query_en": "what is refund policy for windows vps",
+            "intent": "policy",
+            "answer_type": "policy",
+            "target_entity": "refund_policy",
+            "entities": ["windows_vps"],
+            "required_evidence": ["policy_language"],
+            "hard_requirements": ["policy_language"],
+            "retrieval_profile": "generic_profile",
+            "doc_type_prior": ["faq"],
+            "risk_level": "high",
+            "is_ambiguous": False,
+            "clarifying_questions": [],
+            "skip_retrieval": False,
+        })
+    )
+    mock_get_gateway.return_value = mock_gateway
+
+    spec = await normalize("what is refund policy for windows vps")
+
+    assert spec.answer_type == "policy"
+    assert spec.target_entity == "refund_policy"
+    assert spec.retrieval_profile == "policy_profile"
+    assert (spec.doc_type_prior or [])[:2] == ["policy", "tos"]
 
 
 @patch("app.services.normalizer.get_llm_gateway")
@@ -222,7 +257,9 @@ async def test_normalize_accepts_conversation_doc_type_prior(mock_get_gateway):
 
     spec = await normalize("can i buy more ip for my vps")
 
-    assert spec.doc_type_prior == ["pricing", "conversation"]
+    assert spec.doc_type_prior is not None
+    assert spec.doc_type_prior[0] == "pricing"
+    assert "conversation" in spec.doc_type_prior
 
 
 @patch("app.services.normalizer.get_llm_gateway")
@@ -255,6 +292,41 @@ async def test_normalize_builds_primary_and_fallback_hypotheses(mock_get_gateway
     assert spec.primary_hypothesis.name == "primary"
     assert "tos" in (spec.primary_hypothesis.doc_type_prior or [])
     assert len(spec.fallback_hypotheses or []) >= 1
+
+
+@patch("app.services.normalizer.get_llm_gateway")
+@pytest.mark.asyncio
+async def test_normalize_treats_location_availability_as_best_effort_general(mock_get_gateway):
+    mock_gateway = MagicMock()
+    mock_gateway.chat = AsyncMock(
+        return_value=_mock_llm_response({
+            "canonical_query_en": "Do you offer Windows VPS in Singapore?",
+            "intent": "informational",
+            "entities": ["Windows VPS", "Singapore"],
+            "required_evidence": ["policy_language"],
+            "retrieval_profile": "policy_profile",
+            "doc_type_prior": ["faq", "docs", "howto", "conversation"],
+            "risk_level": "low",
+            "is_ambiguous": False,
+            "clarifying_questions": [],
+            "answer_shape": "yes_no",
+            "answer_type": "policy",
+            "product_type": "VPS",
+            "os": "Windows",
+            "skip_retrieval": False,
+        })
+    )
+    mock_get_gateway.return_value = mock_gateway
+
+    spec = await normalize("do u have window vps in sg???")
+
+    assert spec.answer_shape == "yes_no"
+    assert spec.answer_type == "general"
+    assert spec.answer_expectation == "best_effort"
+    assert spec.retrieval_profile == "generic_profile"
+    assert "policy_language" not in (spec.required_evidence or [])
+    assert "policy_language" not in (spec.hard_requirements or [])
+    assert (spec.doc_type_prior or [])[:3] == ["pricing", "docs", "faq"]
 
 
 @patch("app.services.normalizer.get_llm_gateway")
@@ -498,6 +570,34 @@ async def test_normalize_skip_retrieval_greetings(mock_get_gateway):
 
 @patch("app.services.normalizer.get_llm_gateway")
 @pytest.mark.asyncio
+async def test_normalize_out_of_scope_redirect(mock_get_gateway):
+    """Off-topic queries (AI self, personal) get redirect to support scope."""
+    mock_gateway = MagicMock()
+    mock_gateway.chat = AsyncMock(
+        return_value=_mock_llm_response({
+            "canonical_query_en": "do you have money?",
+            "intent": "social",
+            "entities": [],
+            "required_evidence": [],
+            "risk_level": "low",
+            "is_ambiguous": False,
+            "clarifying_questions": [],
+            "retrieval_rewrites": [],
+            "skip_retrieval": True,
+            "out_of_scope": True,
+        })
+    )
+    mock_get_gateway.return_value = mock_gateway
+
+    spec = await normalize("do you have money?")
+    assert spec.out_of_scope
+    assert spec.skip_retrieval
+    assert "help" in spec.canned_response.lower()
+    assert "I don't have money" not in (spec.canned_response or "")
+
+
+@patch("app.services.normalizer.get_llm_gateway")
+@pytest.mark.asyncio
 async def test_normalize_no_skip_for_questions(mock_get_gateway):
     """Actual questions need retrieval."""
     mock_gateway = MagicMock()
@@ -536,3 +636,36 @@ async def test_normalize_llm_fallback_on_error(mock_get_gateway):
     assert spec.retrieval_profile == "generic_profile"
     assert spec.keyword_queries == ["some query"]
     assert spec.semantic_queries == ["some query"]
+
+
+@patch("app.services.normalizer.get_llm_gateway")
+@pytest.mark.asyncio
+async def test_normalize_retries_before_success(mock_get_gateway, monkeypatch):
+    monkeypatch.setenv("NORMALIZER_LLM_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("NORMALIZER_LLM_RETRY_BACKOFF_MS", "0")
+    get_settings.cache_clear()
+
+    mock_gateway = MagicMock()
+    mock_gateway.chat = AsyncMock(
+        side_effect=[
+            Exception("transient timeout"),
+            _mock_llm_response({
+                "canonical_query_en": "vps pricing",
+                "intent": "transactional",
+                "entities": ["vps"],
+                "required_evidence": ["numbers_units"],
+                "risk_level": "low",
+                "is_ambiguous": False,
+                "clarifying_questions": [],
+                "retrieval_rewrites": ["vps pricing"],
+                "skip_retrieval": False,
+            }),
+        ]
+    )
+    mock_get_gateway.return_value = mock_gateway
+
+    spec = await normalize("vps pricing")
+
+    assert spec.extraction_mode == "llm_primary"
+    assert spec.intent == "transactional"
+    assert mock_gateway.chat.await_count == 2

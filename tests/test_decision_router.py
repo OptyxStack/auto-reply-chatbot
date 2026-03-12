@@ -49,11 +49,11 @@ def test_route_pass():
     dr = route(spec, report, [], [], True)
     assert dr.decision == "PASS"
     assert dr.reason == "sufficient"
-    assert dr.lane == "PASS_STRONG"
+    assert dr.lane == "CANDIDATE_VERIFY"
     assert dr.answer_policy == "direct"
 
 
-def test_route_pass_weak_for_answerable_refinement_case():
+def test_route_partial_for_answerable_refinement_case():
     spec = QuerySpec(
         intent="transactional",
         entities=[],
@@ -79,7 +79,7 @@ def test_route_pass_weak_for_answerable_refinement_case():
 
     assert dr.decision == "PASS"
     assert dr.reason == "answerable_with_refinement"
-    assert dr.lane == "PASS_WEAK"
+    assert dr.lane == "CANDIDATE_VERIFY"
     assert dr.answer_policy == "bounded"
     assert dr.clarifying_questions == ["What budget range do you have in mind?"]
 
@@ -104,41 +104,8 @@ def test_route_missing_evidence_quality_no_evidence():
     assert dr.reason == "missing_evidence_quality"
 
 
-def test_route_missing_evidence_quality_with_evidence_fallback_disabled(monkeypatch):
-    """When gate fails and fallback_llm_decides_enabled=False, return ASK_USER."""
-    monkeypatch.setattr(
-        "app.core.config.get_settings",
-        lambda: type("S", (), {"fallback_llm_decides_enabled": False})(),
-    )
-    spec = QuerySpec(
-        intent="transactional",
-        entities=[],
-        constraints={},
-        required_evidence=["numbers_units"],
-        risk_level="low",
-        keyword_queries=["x"],
-        semantic_queries=["x"],
-        clarifying_questions=[],
-        is_ambiguous=False,
-    )
-    report = QualityReport(0.3, {"numbers_units": 0.1}, ["missing_numbers"], None, None)
-    evidence = [
-        EvidenceChunk("c1", "snippet", "https://example.com/page", "pricing", 0.8, "full"),
-    ]
-    dr = route(spec, report, evidence, ["numbers_units"], False)
-    assert dr.decision == "ASK_USER"
-    assert dr.reason == "missing_evidence_quality"
-    assert dr.lane == "ASK_USER"
-    assert dr.partial_links
-    assert "https://example.com/page" in dr.partial_links
-
-
-def test_route_pass_llm_decides_when_gate_fails_with_evidence(monkeypatch):
-    """When gate fails but evidence exists and fallback enabled, return PASS_LLM_DECIDES."""
-    monkeypatch.setattr(
-        "app.core.config.get_settings",
-        lambda: type("S", (), {"fallback_llm_decides_enabled": True})(),
-    )
+def test_route_partial_candidate_when_quality_gate_fails_with_usable_evidence():
+    """Mode-calibration prefers bounded PASS_PARTIAL when evidence is usable."""
     spec = QuerySpec(
         intent="transactional",
         entities=[],
@@ -156,15 +123,35 @@ def test_route_pass_llm_decides_when_gate_fails_with_evidence(monkeypatch):
     ]
     dr = route(spec, report, evidence, ["numbers_units"], False)
     assert dr.decision == "PASS"
-    assert dr.reason == "llm_decides_with_partial"
-    assert dr.lane == "PASS_LLM_DECIDES"
+    assert dr.reason == "partial_sufficient"
+    assert dr.lane == "CANDIDATE_VERIFY"
+    assert dr.answer_policy == "bounded"
 
 
-def test_route_asks_user_when_quality_gate_fails_even_with_partial_coverage(monkeypatch):
-    monkeypatch.setattr(
-        "app.core.config.get_settings",
-        lambda: type("S", (), {"fallback_llm_decides_enabled": False})(),
+def test_route_no_legacy_llm_decides_lane_when_gate_fails_with_evidence():
+    """Legacy PASS_LLM_DECIDES lane is replaced by CANDIDATE_VERIFY/PASS_PARTIAL."""
+    spec = QuerySpec(
+        intent="transactional",
+        entities=[],
+        constraints={},
+        required_evidence=["numbers_units"],
+        risk_level="low",
+        keyword_queries=["x"],
+        semantic_queries=["x"],
+        clarifying_questions=[],
+        is_ambiguous=False,
     )
+    report = QualityReport(0.3, {"numbers_units": 0.1}, ["missing_numbers"], None, None)
+    evidence = [
+        EvidenceChunk("c1", "snippet", "https://example.com/page", "pricing", 0.8, "full"),
+    ]
+    dr = route(spec, report, evidence, ["numbers_units"], False)
+    assert dr.decision == "PASS"
+    assert dr.reason == "partial_sufficient"
+    assert dr.lane == "CANDIDATE_VERIFY"
+
+
+def test_route_partial_candidate_when_quality_fails_with_partial_coverage():
     spec = QuerySpec(
         intent="transactional",
         entities=[],
@@ -192,10 +179,100 @@ def test_route_asks_user_when_quality_gate_fails_even_with_partial_coverage(monk
 
     dr = route(spec, report, evidence, ["numbers_units", "has_any_url"], False)
 
+    assert dr.decision == "PASS"
+    assert dr.reason == "partial_sufficient"
+    assert dr.lane == "CANDIDATE_VERIFY"
+    assert dr.answer_policy == "bounded"
+
+
+def test_route_exact_task_goes_targeted_retry_when_quality_fails(monkeypatch):
+    class _Settings:
+        targeted_retry_enabled = True
+        exact_answer_types = ["direct_link", "pricing", "policy"]
+
+    from app.services import decision_router as module
+    monkeypatch.setattr(module, "get_settings", lambda: _Settings())
+
+    spec = QuerySpec(
+        intent="policy",
+        entities=[],
+        constraints={},
+        required_evidence=["policy_language"],
+        risk_level="low",
+        keyword_queries=["refund terms"],
+        semantic_queries=["refund policy"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        answer_type="policy",
+    )
+    report = QualityReport(0.2, {"policy_language": 0.1}, ["missing_policy"], None, None)
+
+    dr = route(spec, report, [], ["policy_language"], False)
+
+    assert dr.decision == "PASS"
+    assert dr.reason == "exact_targeted_retry"
+    assert dr.lane == "TARGETED_RETRY"
+    assert dr.answer_policy == "targeted_retry"
+
+
+def test_route_exact_task_falls_back_to_ask_user_when_targeted_retry_disabled(monkeypatch):
+    class _Settings:
+        targeted_retry_enabled = False
+
+    from app.services import decision_router as module
+    monkeypatch.setattr(module, "get_settings", lambda: _Settings())
+
+    spec = QuerySpec(
+        intent="policy",
+        entities=[],
+        constraints={},
+        required_evidence=["policy_language"],
+        risk_level="low",
+        keyword_queries=["refund terms"],
+        semantic_queries=["refund policy"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        answer_type="policy",
+    )
+    report = QualityReport(0.2, {"policy_language": 0.1}, ["missing_policy"], None, None)
+
+    dr = route(spec, report, [], ["policy_language"], False)
+
     assert dr.decision == "ASK_USER"
-    assert dr.reason == "missing_evidence_quality"
     assert dr.lane == "ASK_USER"
-    assert dr.answer_policy == "clarify"
+
+
+def test_route_exact_task_goes_candidate_verify_when_quality_passes(monkeypatch):
+    class _Settings:
+        targeted_retry_enabled = True
+        exact_answer_types = ["direct_link", "pricing", "policy"]
+
+    from app.services import decision_router as module
+    monkeypatch.setattr(module, "get_settings", lambda: _Settings())
+
+    spec = QuerySpec(
+        intent="transactional",
+        entities=[],
+        constraints={},
+        required_evidence=["transaction_link"],
+        risk_level="low",
+        keyword_queries=["windows vps order link"],
+        semantic_queries=["windows vps order page"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        answer_type="direct_link",
+    )
+    report = QualityReport(0.9, {"transaction_link": 0.9}, [], None, None)
+    evidence = [
+        EvidenceChunk("c1", "Order now", "https://example.com/order/windows-vps", "pricing", 0.9, "Order now"),
+    ]
+
+    dr = route(spec, report, evidence, ["transaction_link"], True)
+
+    assert dr.decision == "PASS"
+    assert dr.reason == "exact_candidate_verify"
+    assert dr.lane == "CANDIDATE_VERIFY"
+    assert dr.answer_policy == "direct"
 
 
 def test_route_high_risk_insufficient():

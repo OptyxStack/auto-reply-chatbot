@@ -373,7 +373,7 @@ async def test_rag_flow_ambiguous_returns_ask_user(mock_normalize, mock_match_in
 @patch("app.services.answer_service.match_intent")
 @patch("app.services.answer_service.normalize_query")
 @pytest.mark.asyncio
-async def test_rag_flow_answer_then_ask_uses_pass_weak_followup(mock_normalize, mock_match_intent):
+async def test_rag_flow_answer_then_ask_uses_pass_partial_followup(mock_normalize, mock_match_intent):
     mock_match_intent.return_value = None
     mock_normalize.return_value = _make_query_spec(
         is_ambiguous=True,

@@ -23,4 +23,18 @@ def mock_evidence_chunks():
             doc_type="faq",
             score=0.8,
         ),
+        EvidenceChunk(
+            chunk_id="chunk-3",
+            snippet="How to request a refund via support ticket.",
+            source_url="https://example.com/howto/refund",
+            doc_type="howto",
+            score=0.7,
+        ),
+        EvidenceChunk(
+            chunk_id="chunk-4",
+            snippet="VPS plans from $8/month.",
+            source_url="https://example.com/pricing",
+            doc_type="pricing",
+            score=0.6,
+        ),
     ]

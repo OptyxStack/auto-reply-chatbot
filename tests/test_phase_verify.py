@@ -5,7 +5,7 @@ import pytest
 from app.services.orchestrator import OrchestratorContext
 from app.services.phases.verify import execute_verify
 from app.services.reviewer import ReviewerResult, ReviewerStatus
-from app.services.schemas import DecisionResult
+from app.services.schemas import DecisionResult, QuerySpec
 
 
 class _ReviewerStub:
@@ -40,7 +40,21 @@ def _ctx() -> OrchestratorContext:
         clarifying_questions=[],
         partial_links=[],
         answer_policy="direct",
-        lane="PASS_STRONG",
+        lane="PASS_EXACT",
+    )
+    ctx.query_spec = QuerySpec(
+        intent="transactional",
+        entities=[],
+        constraints={},
+        required_evidence=[],
+        risk_level="low",
+        keyword_queries=[],
+        semantic_queries=[],
+        clarifying_questions=[],
+        answer_type="direct_link",
+        target_entity="windows_vps",
+        acceptable_related_types=["pricing"],
+        answer_expectation="exact",
     )
     return ctx
 
@@ -93,3 +107,25 @@ async def test_verify_runs_multi_hypothesis_judge_when_history_present():
 
     assert result.hypothesis_judge is not None
     assert result.hypothesis_judge["selected_hypothesis"] == "fallback_capability"
+
+
+@pytest.mark.asyncio
+async def test_verify_forwards_answer_calibration_context():
+    from app.services import phases
+    phases.verify._pipeline_log = lambda *args, **kwargs: None
+
+    ctx = _ctx()
+    ctx.extra["answer_candidate"] = {
+        "answer_type": "pricing",
+        "answer_mode": "PASS_PARTIAL",
+    }
+    reviewer = _ReviewerStub()
+
+    await execute_verify(ctx, reviewer=reviewer)
+
+    assert reviewer.last_kwargs is not None
+    assert reviewer.last_kwargs["expected_answer_type"] == "direct_link"
+    assert reviewer.last_kwargs["acceptable_related_types"] == ["pricing"]
+    assert reviewer.last_kwargs["answer_expectation"] == "exact"
+    assert reviewer.last_kwargs["target_entity"] == "windows_vps"
+    assert reviewer.last_kwargs["answer_candidate"] == ctx.extra["answer_candidate"]

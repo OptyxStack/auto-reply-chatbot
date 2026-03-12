@@ -3,7 +3,7 @@
 import pytest
 
 from app.services.retrieval_planner import build_retrieval_plan
-from app.services.retry_planner import RetryStrategy
+from app.services.retry_planner import RetryStrategy, plan_targeted_retry_queries
 from app.services.schemas import HypothesisSpec, QuerySpec
 
 
@@ -18,6 +18,14 @@ def test_build_retrieval_plan_attempt_1():
     assert plan.fetch_n > 0
     assert plan.rerank_k > 0
     assert plan.preferred_sources == ["conversation"]
+
+
+def test_build_retrieval_plan_adds_diversity_budget_hint():
+    plan = build_retrieval_plan("how do i configure service", 1)
+    assert plan.budget_hint is not None
+    diversity = plan.budget_hint.get("diversity_doc_types") or []
+    assert isinstance(diversity, list)
+    assert any(dt in diversity for dt in ("howto", "docs", "faq"))
 
 
 def test_build_retrieval_plan_prefers_query_spec_profile():
@@ -99,7 +107,7 @@ def test_build_retrieval_plan_uses_doc_type_prior_and_budget_hint():
     assert "policy" in (plan.budget_hint.get("ensure_doc_types") or [])
 
 
-def test_build_retrieval_plan_does_not_infer_doc_types_when_queryspec_present():
+def test_build_retrieval_plan_derives_doc_types_even_when_queryspec_doc_type_prior_empty():
     spec = QuerySpec(
         intent="policy",
         entities=[],
@@ -117,7 +125,9 @@ def test_build_retrieval_plan_does_not_infer_doc_types_when_queryspec_present():
 
     plan = build_retrieval_plan("refund policy", 1, query_spec=spec)
 
-    assert plan.preferred_doc_types is None
+    assert plan.preferred_doc_types is not None
+    assert "policy" in plan.preferred_doc_types
+    assert "tos" in plan.preferred_doc_types
     assert plan.profile == "policy_profile"
     assert plan.preferred_sources == ["conversation"]
 
@@ -139,7 +149,9 @@ def test_build_retrieval_plan_accepts_conversation_in_doc_type_prior():
 
     plan = build_retrieval_plan("buy more ip", 1, query_spec=spec)
 
-    assert plan.preferred_doc_types == ["pricing", "conversation"]
+    assert plan.preferred_doc_types is not None
+    assert plan.preferred_doc_types[:2] == ["pricing", "conversation"]
+    assert "tos" in plan.preferred_doc_types
     assert plan.preferred_sources == ["conversation"]
 
 
@@ -223,3 +235,75 @@ def test_build_retrieval_plan_retry_switches_to_fallback_hypothesis():
     assert plan.profile == "policy_profile"
     assert plan.active_required_evidence == ["policy_language"]
     assert "tos" in (plan.authoritative_doc_types or [])
+
+
+def test_build_retrieval_plan_adds_page_kind_hints_for_direct_link():
+    spec = QuerySpec(
+        intent="transactional",
+        entities=["windows", "vps"],
+        constraints={},
+        required_evidence=["transaction_link"],
+        risk_level="low",
+        keyword_queries=["windows vps order page"],
+        semantic_queries=["windows vps order page"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        retrieval_profile="pricing_profile",
+        answer_type="direct_link",
+        target_entity="windows_vps",
+    )
+
+    plan = build_retrieval_plan("windows vps order link", 1, query_spec=spec)
+    hint = plan.budget_hint or {}
+
+    assert hint.get("answer_type") == "direct_link"
+    assert "order_page" in (hint.get("preferred_page_kinds") or [])
+    assert "product_page" in (hint.get("preferred_page_kinds") or [])
+    assert "windows_vps" in (hint.get("product_family_hints") or [])
+    assert "faq" in (hint.get("demote_doc_types") or [])
+
+
+def test_build_retrieval_plan_derives_windows_product_family_from_slots_and_entities():
+    spec = QuerySpec(
+        intent="informational",
+        entities=["Windows VPS", "Singapore"],
+        constraints={},
+        required_evidence=[],
+        risk_level="low",
+        keyword_queries=["windows vps singapore"],
+        semantic_queries=["windows vps singapore"],
+        clarifying_questions=[],
+        is_ambiguous=False,
+        retrieval_profile="generic_profile",
+        answer_type="general",
+        answer_shape="yes_no",
+        target_entity="Windows VPS availability by location",
+        resolved_slots={"product_type": "vps", "os": "windows"},
+    )
+
+    plan = build_retrieval_plan("do u have window vps in sg", 1, query_spec=spec)
+    hint = plan.budget_hint or {}
+
+    assert "windows_vps" in (hint.get("product_family_hints") or [])
+    assert "product_page" in (hint.get("preferred_page_kinds") or [])
+
+
+def test_plan_targeted_retry_queries_for_direct_link():
+    queries = plan_targeted_retry_queries(
+        expected_answer_type="direct_link",
+        target_entity="windows_vps",
+        query="need windows vps link",
+    )
+    assert queries
+    assert queries[0] == "windows vps order page"
+    assert "windows vps product page" in queries
+
+
+def test_plan_targeted_retry_queries_for_policy():
+    queries = plan_targeted_retry_queries(
+        expected_answer_type="policy",
+        target_entity="refund_policy",
+        query="what is the refund policy",
+    )
+    assert queries
+    assert "refund policy terms of service" in queries[0].lower()

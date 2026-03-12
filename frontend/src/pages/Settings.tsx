@@ -28,6 +28,7 @@ export default function Settings() {
   const [finalPolish, setFinalPolish] = useState(false)
   const [docTypeClassifier, setDocTypeClassifier] = useState(false)
   const [retrievalDocTypeUseLlm, setRetrievalDocTypeUseLlm] = useState(false)
+  const [pageKindFilterEnabled, setPageKindFilterEnabled] = useState(false)
   const [llmModelEconomy, setLlmModelEconomy] = useState('gpt-4o-mini')
   const [llmTaskAwareRouting, setLlmTaskAwareRouting] = useState(true)
 
@@ -55,6 +56,7 @@ export default function Settings() {
         setFinalPolish(archiData.final_polish_enabled)
         setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
         setRetrievalDocTypeUseLlm(archiData.retrieval_doc_type_use_llm ?? false)
+        setPageKindFilterEnabled(archiData.page_kind_filter_enabled ?? false)
         setLlmModelEconomy(archiData.llm_model_economy ?? 'gpt-4o-mini')
         setLlmTaskAwareRouting(archiData.llm_task_aware_routing_enabled ?? true)
         setSystemPrompt(promptData.value)
@@ -111,6 +113,8 @@ export default function Settings() {
       setSelfCritic(archiData.self_critic_enabled)
       setFinalPolish(archiData.final_polish_enabled)
       setDocTypeClassifier(archiData.doc_type_classifier_enabled ?? false)
+      setRetrievalDocTypeUseLlm(archiData.retrieval_doc_type_use_llm ?? false)
+      setPageKindFilterEnabled(archiData.page_kind_filter_enabled ?? false)
       setLlmModelEconomy(archiData.llm_model_economy ?? 'gpt-4o-mini')
       setLlmTaskAwareRouting(archiData.llm_task_aware_routing_enabled ?? true)
       setSystemPrompt(promptData.value)
@@ -158,6 +162,7 @@ export default function Settings() {
         final_polish_enabled: finalPolish,
         doc_type_classifier_enabled: docTypeClassifier,
         retrieval_doc_type_use_llm: retrievalDocTypeUseLlm,
+        page_kind_filter_enabled: pageKindFilterEnabled,
         llm_model_economy: llmModelEconomy.trim(),
         llm_task_aware_routing_enabled: llmTaskAwareRouting,
       })
@@ -174,6 +179,7 @@ export default function Settings() {
       setFinalPolish(data.final_polish_enabled)
       setDocTypeClassifier(data.doc_type_classifier_enabled ?? false)
       setRetrievalDocTypeUseLlm(data.retrieval_doc_type_use_llm ?? false)
+      setPageKindFilterEnabled(data.page_kind_filter_enabled ?? false)
       setLlmModelEconomy(data.llm_model_economy ?? 'gpt-4o-mini')
       setLlmTaskAwareRouting(data.llm_task_aware_routing_enabled ?? true)
     } catch (e) {
@@ -501,6 +507,13 @@ export default function Settings() {
             description="Use LLM to select which doc types to search based on query semantics (policy, faq, pricing, etc.)"
             checked={retrievalDocTypeUseLlm}
             onChange={setRetrievalDocTypeUseLlm}
+            disabled={savingArchi}
+          />
+          <ToggleRow
+            label="Page kind filter"
+            description="Filter retrieval by page_kind (howto, faq, etc.). Disable when chunks lack page_kind; enable after re-ingest."
+            checked={pageKindFilterEnabled}
+            onChange={setPageKindFilterEnabled}
             disabled={savingArchi}
           />
           <div className="pt-2 border-t border-white/[0.06] mt-2">

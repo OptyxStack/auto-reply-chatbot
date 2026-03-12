@@ -140,3 +140,33 @@ async def test_select_evidence_validates_policy_language_mapping(monkeypatch):
             result = await select_evidence_for_query("query", chunks, required_evidence=["policy_language"])
     assert result.coverage_map == {}
     assert result.uncovered_requirements == ["policy_language"]
+
+
+@pytest.mark.asyncio
+async def test_select_evidence_rebalances_toward_structured_docs(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.evidence_selector.get_settings",
+        lambda: type(
+            "S",
+            (),
+            {
+                "evidence_selector_use_llm": False,
+                "evidence_selector_structured_doc_types": "howto,docs,faq,policy,tos,pricing",
+                "evidence_selector_conversation_cap": 1,
+                "evidence_selector_min_structured_share": 0.75,
+            },
+        )(),
+    )
+    chunks = [
+        (_make_chunk("conv1", doc_type="conversation"), 0.95),
+        (_make_chunk("conv2", doc_type="conversation"), 0.9),
+        (_make_chunk("how1", doc_type="howto"), 0.7),
+        (_make_chunk("doc1", doc_type="docs"), 0.68),
+        (_make_chunk("faq1", doc_type="faq"), 0.66),
+    ]
+
+    result = await select_evidence_for_query("how to configure", chunks, top_k_fallback=4)
+
+    selected_doc_types = [(c.doc_type or "").lower() for c, _ in result.selected]
+    assert selected_doc_types.count("conversation") <= 1
+    assert sum(1 for dt in selected_doc_types if dt in {"howto", "docs", "faq"}) >= 2

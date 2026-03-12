@@ -16,15 +16,19 @@ from app.services.schemas import AnswerOutput
 def _debug_payload(
     *,
     evidence_ids: list[str],
+    evidence_rows: list[dict] | None = None,
     covered_requirements: list[str] | None = None,
     hard_coverage: dict[str, bool] | None = None,
     unsupported_claims: list[str] | None = None,
+    decision_router: dict | None = None,
 ):
+    rows = evidence_rows or [{"chunk_id": cid} for cid in evidence_ids]
     return {
-        "evidence_summary": [{"chunk_id": cid} for cid in evidence_ids],
+        "evidence_summary": rows,
         "evidence_set": {"covered_requirements": covered_requirements or []},
         "quality_report": {"hard_requirement_coverage": hard_coverage or {}},
         "review_unsupported_claims": unsupported_claims or [],
+        "decision_router": decision_router or {},
     }
 
 
@@ -84,6 +88,10 @@ async def test_evaluate_case_computes_split_metrics_and_passes():
     assert result.metrics["answer_correctness"] == 1.0
     assert result.metrics["hallucination_rate"] == 0.0
     assert result.metrics["citation_validity"] == 1.0
+    assert result.metrics["wrong_but_cited"] is False
+    assert result.metrics["answer_type_mismatch"] is False
+    assert result.metrics["partial_without_disclaimer"] is False
+    assert result.metrics["faq_returned_for_link_lookup"] is False
 
 
 @pytest.mark.asyncio
@@ -120,3 +128,117 @@ async def test_run_offline_eval_marks_hallucination_failures():
     assert results[0].passed is False
     assert results[0].metrics["hallucination_rate"] > 0.0
     assert results[0].metrics["forbidden_violations"]
+    assert summary.wrong_but_cited_rate == 1.0
+
+
+@pytest.mark.asyncio
+async def test_evaluate_case_flags_answer_type_mismatch_and_faq_link_error():
+    case = OfflineEvalCase(
+        name="link_lookup_case",
+        input="give me windows vps order link",
+        expected_decision="PASS",
+        expected_answer_type="direct_link",
+        required_evidence=["transaction_link"],
+        expected_answer_contains=["order"],
+    )
+    output = AnswerOutput(
+        decision="PASS",
+        answer="See this FAQ for details.",
+        followup_questions=[],
+        citations=[{"chunk_id": "chunk-faq-1", "doc_type": "faq", "source_url": "https://example.com/faq"}],
+        confidence=0.8,
+        debug=_debug_payload(
+            evidence_ids=["chunk-faq-1"],
+            evidence_rows=[
+                {
+                    "chunk_id": "chunk-faq-1",
+                    "doc_type": "faq",
+                    "source_url": "https://example.com/faq",
+                }
+            ],
+        ),
+    )
+    svc = _FakeAnswerService({case.input: output})
+
+    result = await evaluate_case(svc, case, run_id="testrun3")
+
+    assert result.metrics["answer_type_mismatch"] is True
+    assert result.metrics["faq_returned_for_link_lookup"] is True
+    assert result.metrics["wrong_but_cited"] is True
+
+
+@pytest.mark.asyncio
+async def test_evaluate_case_flags_partial_without_disclaimer():
+    case = OfflineEvalCase(
+        name="partial_case",
+        input="can you confirm setup and exact limits?",
+        expected_decision="PASS",
+        expected_answer_mode="partial",
+        expected_answer_type="troubleshooting",
+        required_evidence=["steps_structure"],
+        expected_answer_contains=["step"],
+    )
+    output = AnswerOutput(
+        decision="PASS",
+        answer="Step 1: run this command. Step 2: restart service.",
+        followup_questions=[],
+        citations=[{"chunk_id": "chunk-howto-1"}],
+        confidence=0.55,
+        debug=_debug_payload(
+            evidence_ids=["chunk-howto-1"],
+            decision_router={"lane": "PASS_PARTIAL", "reason": "answerable_with_refinement"},
+        ),
+    )
+    svc = _FakeAnswerService({case.input: output})
+
+    result = await evaluate_case(svc, case, run_id="testrun4")
+
+    assert result.metrics["partial_answer"] is True
+    assert result.metrics["has_partial_disclaimer"] is False
+    assert result.metrics["partial_without_disclaimer"] is True
+
+
+@pytest.mark.asyncio
+async def test_run_offline_eval_can_use_recorded_output_without_service():
+    case = OfflineEvalCase(
+        name="recorded_case",
+        input="where is order link",
+        expected_decision="PASS",
+        expected_answer_type="direct_link",
+        required_evidence=["transaction_link"],
+        expected_answer_contains=["order"],
+        recorded_output={
+            "decision": "PASS",
+            "answer": "Order here: https://example.com/order/windows-vps",
+            "followup_questions": [],
+            "citations": [
+                {
+                    "chunk_id": "trace-1",
+                    "source_url": "https://example.com/order/windows-vps",
+                    "doc_type": "pricing",
+                }
+            ],
+            "confidence": 0.8,
+            "debug": {
+                "evidence_summary": [
+                    {
+                        "chunk_id": "trace-1",
+                        "source_url": "https://example.com/order/windows-vps",
+                        "doc_type": "pricing",
+                    }
+                ],
+                "evidence_set": {"covered_requirements": ["transaction_link"]},
+                "quality_report": {"hard_requirement_coverage": {"transaction_link": True}},
+            },
+        },
+    )
+    summary, results = await run_offline_eval(
+        None,
+        [case],
+        run_id="testrun5",
+        use_recorded_output=True,
+    )
+
+    assert summary.case_count == 1
+    assert results[0].passed is True
+    assert results[0].metrics["answer_type_mismatch"] is False

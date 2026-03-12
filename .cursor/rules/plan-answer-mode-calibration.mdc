@@ -1,0 +1,57 @@
+---
+description: Kế hoạch chuyển từ PASS/FAIL cứng sang answer-mode calibration (LLM-first, 3 guardrails)
+alwaysApply: true
+---
+
+# Plan: Answer-Mode Calibration
+
+## Mục tiêu
+
+Giữ hướng LLM-first, đổi từ logic PASS/FAIL cứng sang **answer-mode calibration**:
+- Model vẫn tự hiểu intent, rewrite, chọn evidence, tổng hợp câu trả lời
+- Hệ thống chỉ giữ **3 guardrails**: đúng loại câu trả lời, không nói quá bằng chứng, confidence khớp mức support
+
+## Flow đích
+
+| Phase | Thay đổi |
+|-------|----------|
+| **Understand** | LLM trả `answer_type`, `target_entity`, `answer_expectation`, `blocking_missing_slots`; không còn dùng `doc_type_prior` như control plane chính → `normalizer.py`, `schemas.py` |
+| **Plan** | Code derive retrieval lane từ `answer_type`, không phụ thuộc hoàn toàn LLM → `retrieval_planner.py` |
+| **Retrieve** | Lấy rộng theo pool (product/catalog, pricing/order, policy, docs/kb, conversation); mỗi lane có tỉ trọng pool khác nhau → `retrieval.py`, `opensearch_client.py`, `qdrant_client.py` |
+| **Synthesize Candidate** | Model sinh `AnswerCandidate` dạng JSON thay vì prose tự do |
+| **Verify/Calibrate** | Verifier nhẹ quyết định EXACT, PARTIAL, hoặc ASK_USER; chỉ check answer type, overclaim, confidence fit |
+| **Repair Loop** | Nếu gần đúng nhưng sai loại answer → retry targeted một lần thay vì ASK ngay |
+| **Render** | Chỉ khi candidate đã calibrate mới render prose cuối cùng |
+
+## 3 mode đầu ra
+
+- **PASS_EXACT**: Tìm đúng loại answer user cần (vd: link → đúng product/order/catalog page)
+- **PASS_PARTIAL**: Chưa có exact answer nhưng có official info liên quan; **bắt buộc** wording: "closest related page", "closest official info", "best available information"
+- **ASK_USER**: Chỉ khi không có câu trả lời hữu ích hoặc entity thật sự mơ hồ
+
+## Phases chi tiết
+
+| Phase | Nội dung | Files chính |
+|-------|----------|-------------|
+| **0** | Baseline, offline_eval, golden set 100–200 trace | `offline_eval.py`, `offline_eval_replay_cases.jsonl` |
+| **1** | Schema soft-contract: `answer_type`, `target_entity`, `answer_expectation`, `AnswerCandidate` | `schemas.py`, `normalizer.py` |
+| **2** | Route từ quality-gate sang mode-calibration; exact tasks → CANDIDATE_VERIFY/TARGETED_RETRY | `decision_router.py`, `answer_utils.py` |
+| **3** | Taxonomy nhẹ: `page_kind`, `product_family`; weighting mềm theo `answer_type` | `source_loaders.py`, `opensearch_client.py`, `qdrant_client.py` |
+| **4** | Answer calibrator: type match, overclaim check, confidence calibration | `reviewer.py` |
+| **5** | Targeted retry khi type_mismatch | `retry_planner.py`, `orchestrator.py` |
+| **6** | Render sau calibrate; feature flags | `output_builder.py`, `config.py` |
+
+## Feature flags (config.py)
+
+- `soft_contract_enabled`
+- `answer_candidate_enabled`
+- `page_kind_filter_enabled`
+- `targeted_retry_enabled`
+
+## KPI chấp nhận
+
+- Exact-link precision trên golden set > 95%
+- wrong_but_cited rate < 2%
+- PASS_PARTIAL mà không có disclaimer = 0
+- PASS_LLM_DECIDES cho direct_link/pricing/policy = 0
+- Tỉ lệ ASK_USER giảm; exact-task hallucination không tăng

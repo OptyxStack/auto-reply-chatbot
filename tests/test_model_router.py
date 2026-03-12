@@ -41,6 +41,12 @@ def test_get_model_for_task_final_polish_uses_economy():
     assert model
 
 
+def test_get_model_for_task_conversation_relevance_check_uses_economy():
+    """Conversation relevance check task should use economy model."""
+    model = get_model_for_task("conversation_relevance_check")
+    assert model
+
+
 def test_get_model_for_task_unknown_falls_back_to_primary():
     """Unknown task falls back to primary."""
     model = get_model_for_task("unknown_task")

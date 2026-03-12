@@ -19,6 +19,7 @@ import {
   AlertTriangle,
   ExternalLink,
   Sparkles,
+  MessageSquare,
 } from 'lucide-react'
 
 export default function ConversationDetail() {
@@ -270,7 +271,8 @@ function MessageBubble({ message }: { message: Message }) {
   const hasDebug = debug && (
     debug.decision != null || debug.confidence != null || debug.trace_id ||
     debug.source_lang || debug.evidence_eval || debug.self_critic_regenerated || debug.final_polish_applied ||
-    (debug.stage_reasons && debug.stage_reasons.length > 0) || debug.termination_reason
+    (debug.stage_reasons && debug.stage_reasons.length > 0) || debug.termination_reason ||
+    debug.conversation_relevance
   )
 
   return (
@@ -427,6 +429,16 @@ function FlowDebugPanel({ debug }: { debug: FlowDebug }) {
           )}
         </div>
       </DebugSection>
+
+      {debug.conversation_relevance && (
+        <DebugSection icon={<MessageSquare size={13} />} title="Conversation Relevance">
+          <div className="space-y-1 text-zinc-400">
+            <div>Relevant: <span className={debug.conversation_relevance.relevant ? 'text-emerald-400' : 'text-amber-400'}>{debug.conversation_relevance.relevant ? 'Yes' : 'No'}</span></div>
+            {debug.conversation_relevance.reason && <div>Reason: <span className="text-zinc-300">{debug.conversation_relevance.reason}</span></div>}
+            {debug.conversation_relevance.relevant_turn_count != null && <div>Turns used: <span className="text-zinc-300">{String(debug.conversation_relevance.relevant_turn_count)}</span></div>}
+          </div>
+        </DebugSection>
+      )}
 
       {debug.query_rewrite && (
         <DebugSection icon={<Search size={13} />} title="Query Rewrite">

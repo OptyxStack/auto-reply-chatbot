@@ -1,6 +1,7 @@
 """Tests for Evidence Quality Gate and Evidence Hygiene."""
 
 import pytest
+from unittest.mock import AsyncMock, patch
 
 from app.search.base import EvidenceChunk
 from app.services.evidence_hygiene import compute_hygiene
@@ -64,6 +65,57 @@ def test_passes_quality_gate_uses_hard_coverage_when_gate_pass_none():
         hard_requirement_coverage={"numbers_units": True},
     )
     assert passes_quality_gate(report, ["numbers_units"], hard_requirements=["numbers_units"])
+
+
+def test_passes_quality_gate_checks_completeness_when_gate_pass_none():
+    report = QualityReport(
+        0.9,
+        {},
+        [],
+        None,
+        0.0,
+        gate_pass=None,
+        hard_requirement_coverage={},
+        completeness_score=0.1,
+    )
+    assert not passes_quality_gate(report, None)
+
+
+@pytest.mark.asyncio
+async def test_evaluate_quality_parses_completeness_and_actionability(monkeypatch):
+    mock_resp = type(
+        "R",
+        (),
+        {
+            "content": (
+                '{"is_sufficient": true, "confidence": 0.81, '
+                '"completeness": 0.72, "actionability": 0.66, '
+                '"reason": "sufficient", "gaps": [], '
+                '"coverage": {"numbers_units": true}}'
+            )
+        },
+    )()
+    with patch("app.services.llm_gateway.get_llm_gateway") as mock_gw:
+        mock_gw.return_value.chat = AsyncMock(return_value=mock_resp)
+        report = await evaluate_quality(
+            "query",
+            [
+                EvidenceChunk(
+                    "c1",
+                    "Plan starts at $10/month",
+                    "https://example.com/pricing",
+                    "pricing",
+                    0.9,
+                    "Plan starts at $10/month",
+                )
+            ],
+            required_evidence=["numbers_units"],
+            hard_requirements=["numbers_units"],
+            context={"answer_shape": "comparison"},
+        )
+    assert report.gate_pass is True
+    assert report.completeness_score == 0.72
+    assert report.actionability_score == 0.66
 
 
 def test_plan_retry_attempt_1():

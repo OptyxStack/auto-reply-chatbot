@@ -9,6 +9,7 @@ from app.services.orchestrator import (
     OrchestratorState,
     PhaseResult,
 )
+from app.services.reviewer import ReviewerResult, ReviewerStatus
 from app.services.schemas import DecisionResult, QuerySpec
 
 
@@ -104,9 +105,56 @@ def test_next_action_deciding_pass_returns_generate():
         reason="sufficient",
         clarifying_questions=[],
         partial_links=[],
-        lane="PASS_STRONG",
+        lane="PASS_EXACT",
     )
     assert orch.next_action(ctx) == OrchestratorAction.GENERATE
+
+
+def test_next_action_deciding_candidate_verify_returns_generate():
+    orch = Orchestrator()
+    ctx = _ctx(OrchestratorState.DECIDING)
+    ctx.decision_result = DecisionResult(
+        decision="PASS",
+        reason="sufficient",
+        clarifying_questions=[],
+        partial_links=[],
+        lane="CANDIDATE_VERIFY",
+    )
+    assert orch.next_action(ctx) == OrchestratorAction.GENERATE
+
+
+def test_next_action_deciding_targeted_retry_returns_retry_when_available():
+    orch = Orchestrator()
+    ctx = _ctx(
+        OrchestratorState.DECIDING,
+        retrieval_attempt=0,
+        max_attempts=2,
+    )
+    ctx.decision_result = DecisionResult(
+        decision="PASS",
+        reason="exact_targeted_retry",
+        clarifying_questions=[],
+        partial_links=[],
+        lane="TARGETED_RETRY",
+    )
+    assert orch.next_action(ctx) == OrchestratorAction.RETRY_RETRIEVE
+
+
+def test_next_action_deciding_targeted_retry_returns_ask_user_when_exhausted():
+    orch = Orchestrator()
+    ctx = _ctx(
+        OrchestratorState.DECIDING,
+        retrieval_attempt=2,
+        max_attempts=2,
+    )
+    ctx.decision_result = DecisionResult(
+        decision="PASS",
+        reason="exact_targeted_retry",
+        clarifying_questions=[],
+        partial_links=[],
+        lane="TARGETED_RETRY",
+    )
+    assert orch.next_action(ctx) == OrchestratorAction.ASK_USER
 
 
 def test_next_action_deciding_escalate_returns_escalate():
@@ -157,6 +205,82 @@ def test_next_action_reviewing_retrieve_more_defaults_to_ask_user():
     assert orch.next_action(ctx, reviewer_status="RETRIEVE_MORE") == OrchestratorAction.ASK_USER
 
 
+def test_next_action_reviewing_ask_user_can_schedule_targeted_retry():
+    orch = Orchestrator()
+    ctx = _ctx(
+        OrchestratorState.GENERATING,
+        retrieval_attempt=0,
+        max_attempts=2,
+    )
+    rr = ReviewerResult(
+        status=ReviewerStatus.ASK_USER,
+        reasons=["Answer type mismatch for exact task."],
+        suggested_queries=["windows vps order page", "windows vps product page"],
+        missing_fields=["exact_answer_type"],
+        retry_reason="type_mismatch",
+    )
+    orch._apply_result(
+        ctx,
+        OrchestratorAction.VERIFY,
+        PhaseResult(reviewer_result=rr),
+    )
+
+    assert ctx.state == OrchestratorState.REVIEWING
+    assert ctx.retry_query_override == "windows vps order page"
+    assert ctx.extra.get("verify_targeted_retry_pending") is True
+    assert orch.next_action(ctx, reviewer_status="ASK_USER") == OrchestratorAction.RETRY_RETRIEVE
+
+
+def test_next_action_reviewing_ask_user_no_second_targeted_retry():
+    orch = Orchestrator()
+    ctx = _ctx(
+        OrchestratorState.GENERATING,
+        retrieval_attempt=1,
+        max_attempts=2,
+        extra={"verify_targeted_retry_used": True},
+    )
+    rr = ReviewerResult(
+        status=ReviewerStatus.ASK_USER,
+        reasons=["Answer type mismatch for exact task."],
+        suggested_queries=["windows vps order page"],
+        missing_fields=["exact_answer_type"],
+        retry_reason="type_mismatch",
+    )
+    orch._apply_result(
+        ctx,
+        OrchestratorAction.VERIFY,
+        PhaseResult(reviewer_result=rr),
+    )
+
+    assert ctx.extra.get("verify_targeted_retry_pending") is not True
+    assert orch.next_action(ctx, reviewer_status="ASK_USER") == OrchestratorAction.ASK_USER
+
+
+def test_next_action_reviewing_ask_user_no_targeted_retry_when_flag_disabled():
+    orch = Orchestrator()
+    orch._settings.targeted_retry_enabled = False
+    ctx = _ctx(
+        OrchestratorState.GENERATING,
+        retrieval_attempt=0,
+        max_attempts=2,
+    )
+    rr = ReviewerResult(
+        status=ReviewerStatus.ASK_USER,
+        reasons=["Answer type mismatch for exact task."],
+        suggested_queries=["windows vps order page"],
+        missing_fields=["exact_answer_type"],
+        retry_reason="type_mismatch",
+    )
+    orch._apply_result(
+        ctx,
+        OrchestratorAction.VERIFY,
+        PhaseResult(reviewer_result=rr),
+    )
+
+    assert ctx.extra.get("verify_targeted_retry_pending") is not True
+    assert orch.next_action(ctx, reviewer_status="ASK_USER") == OrchestratorAction.ASK_USER
+
+
 def test_next_action_retrying_returns_retrieve():
     orch = Orchestrator()
     ctx = _ctx(OrchestratorState.RETRYING)
@@ -188,9 +312,9 @@ def test_context_current_lane_from_decision_result():
         reason="sufficient",
         clarifying_questions=[],
         partial_links=[],
-        lane="PASS_WEAK",
+        lane="PASS_PARTIAL",
     )
-    assert ctx.current_lane() == "PASS_WEAK"
+    assert ctx.current_lane() == "PASS_PARTIAL"
 
 
 @pytest.mark.asyncio

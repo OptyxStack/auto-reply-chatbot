@@ -267,6 +267,97 @@ async def test_retrieve_fetches_conversation_as_secondary_source(monkeypatch):
     assert any(chunk.doc_type == "conversation" for chunk in pack.chunks)
 
 
+@pytest.mark.asyncio
+async def test_retrieve_fans_out_diversity_doc_types(monkeypatch):
+    class FakeOpenSearch:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def search(self, query: str, *, top_n: int = 50, doc_types=None, boost_pricing=False, prefer_snippet=False):
+            _ = (query, boost_pricing, prefer_snippet)
+            doc_types = list(doc_types or [])
+            self.calls.append({"doc_types": doc_types, "top_n": top_n})
+            if doc_types == ["howto"]:
+                return [SearchChunk("how-1", "d2", "Step 1: open console", "https://docs/howto", "howto", 0.62)]
+            if doc_types == ["docs"]:
+                return [SearchChunk("doc-1", "d3", "Docs explain options", "https://docs/main", "docs", 0.6)]
+            if doc_types == ["faq"]:
+                return [SearchChunk("faq-1", "d4", "FAQ about common setup", "https://docs/faq", "faq", 0.58)]
+            return [SearchChunk("price-1", "d1", "Base plan starts at $10", "https://docs/pricing", "pricing", 0.9)]
+
+    class FakeQdrant:
+        def search(self, *, vector, top_n: int = 50, doc_types=None):
+            _ = (vector, top_n, doc_types)
+            return []
+
+    class FakeEmbedder:
+        async def embed(self, texts):
+            _ = texts
+            return [[0.1, 0.2]]
+
+    class FakeReranker:
+        async def rerank(self, query, chunks, top_k):
+            _ = query
+            ranked = sorted(chunks, key=lambda c: c.score, reverse=True)
+            return [(c, c.score) for c in ranked[:top_k]]
+
+    opensearch = FakeOpenSearch()
+    svc = RetrievalService(
+        opensearch=opensearch,
+        qdrant=FakeQdrant(),
+        embedding_provider=FakeEmbedder(),
+        reranker=FakeReranker(),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_settings",
+        type(
+            "S",
+            (),
+            {
+                "retrieval_top_n": 20,
+                "retrieval_top_k": 6,
+                "retrieval_fusion": "simple",
+                "retrieval_rrf_k": 60,
+                "retrieval_plans_extra_chunks": 4,
+                "retrieval_ensure_doc_type_min": 0,
+                "retrieval_conversation_score_penalty": 0.55,
+                "evidence_selector_use_llm": False,
+                "evidence_selector_fallback_top_k": 6,
+            },
+        )(),
+    )
+
+    plan = RetrievalPlan(
+        profile="generic_profile",
+        attempt_index=1,
+        reason="test_plan",
+        query_keyword="how to configure service",
+        query_semantic="how to configure service",
+        preferred_doc_types=["pricing"],
+        authoritative_doc_types=["pricing"],
+        fetch_n=8,
+        rerank_k=5,
+        budget_hint={
+            "boost_pricing": False,
+            "ensure_doc_types": ["pricing"],
+            "hard_requirements": [],
+            "diversity_doc_types": ["howto", "docs", "faq"],
+            "diversity_fetch_per_type": 2,
+        },
+    )
+
+    pack = await svc.retrieve("configure service", retrieval_plan=plan)
+
+    called_doc_types = [call["doc_types"] for call in opensearch.calls]
+    assert ["howto"] in called_doc_types
+    assert ["docs"] in called_doc_types
+    assert ["faq"] in called_doc_types
+    assert pack.retrieval_stats["diversity_doc_types"] == ["howto", "docs", "faq"]
+    covered = set(pack.retrieval_stats.get("diversity_doc_types_covered") or [])
+    assert {"howto", "docs", "faq"} <= covered
+
+
 def test_retain_supporting_conversation_chunk_preserves_one_when_selector_drops_it():
     selected = [
         (SearchChunk("p1", "d1", "pricing", "https://docs/pricing", "pricing", 0.9), 0.9),
@@ -284,3 +375,353 @@ def test_retain_supporting_conversation_chunk_preserves_one_when_selector_drops_
 
     assert len(updated) == 2
     assert any(chunk.doc_type == "conversation" for chunk, _ in updated)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_passes_page_kind_and_product_family_hints(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.archi_config.get_page_kind_filter_enabled",
+        lambda: True,
+    )
+
+    class FakeOpenSearch:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def search(
+            self,
+            query: str,
+            *,
+            top_n: int = 50,
+            doc_types=None,
+            boost_pricing=False,
+            prefer_snippet=False,
+            page_kinds=None,
+            product_families=None,
+            page_kind_weights=None,
+            product_family_weights=None,
+        ):
+            _ = (query, boost_pricing, prefer_snippet)
+            self.calls.append(
+                {
+                    "doc_types": list(doc_types or []),
+                    "page_kinds": list(page_kinds or []),
+                    "product_families": list(product_families or []),
+                    "page_kind_weights": dict(page_kind_weights or {}),
+                    "product_family_weights": dict(product_family_weights or {}),
+                }
+            )
+            return [
+                SearchChunk(
+                    "bm25-1",
+                    "d1",
+                    "Windows VPS order page",
+                    "https://example.com/order/windows-vps",
+                    "pricing",
+                    0.9,
+                    metadata={"page_kind": "order_page", "product_family": "windows_vps"},
+                )
+            ]
+
+    class FakeQdrant:
+        def search(self, *, vector, top_n=50, doc_types=None, page_kinds=None, product_families=None):
+            _ = (vector, top_n, doc_types, page_kinds, product_families)
+            return []
+
+    class FakeEmbedder:
+        async def embed(self, texts):
+            _ = texts
+            return [[0.1, 0.2]]
+
+    class FakeReranker:
+        async def rerank(self, query, chunks, top_k):
+            _ = query
+            ranked = sorted(chunks, key=lambda c: c.score, reverse=True)
+            return [(c, c.score) for c in ranked[:top_k]]
+
+    opensearch = FakeOpenSearch()
+    svc = RetrievalService(
+        opensearch=opensearch,
+        qdrant=FakeQdrant(),
+        embedding_provider=FakeEmbedder(),
+        reranker=FakeReranker(),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_settings",
+        type(
+            "S",
+            (),
+            {
+                "retrieval_top_n": 20,
+                "retrieval_top_k": 4,
+                "retrieval_fusion": "simple",
+                "retrieval_rrf_k": 60,
+                "retrieval_plans_extra_chunks": 4,
+                "retrieval_ensure_doc_type_min": 0,
+                "retrieval_conversation_score_penalty": 0.55,
+                "retrieval_page_kind_weighting_enabled": True,
+                "evidence_selector_use_llm": False,
+                "evidence_selector_fallback_top_k": 4,
+            },
+        )(),
+    )
+
+    plan = RetrievalPlan(
+        profile="pricing_profile",
+        attempt_index=1,
+        reason="test_plan",
+        query_keyword="windows vps order link",
+        query_semantic="windows vps order link",
+        preferred_doc_types=["pricing", "docs"],
+        authoritative_doc_types=["pricing", "docs"],
+        fetch_n=8,
+        rerank_k=4,
+        budget_hint={
+            "preferred_page_kinds": ["order_page", "product_page"],
+            "supporting_page_kinds": ["pricing_table"],
+            "page_kind_weights": {"order_page": 1.45, "product_page": 1.25},
+            "product_family_hints": ["windows_vps"],
+            "product_family_weights": {"windows_vps": 1.2},
+            "demote_doc_types": ["faq", "blog"],
+        },
+    )
+
+    pack = await svc.retrieve("windows vps order link", retrieval_plan=plan)
+
+    assert pack.chunks
+    assert opensearch.calls
+    first_call = opensearch.calls[0]
+    assert "order_page" in first_call["page_kinds"]
+    assert "windows_vps" in first_call["product_families"]
+    assert first_call["page_kind_weights"].get("order_page") == pytest.approx(1.45)
+
+
+@pytest.mark.asyncio
+async def test_retrieve_keeps_product_family_hints_when_page_kind_flag_off(monkeypatch):
+    class FakeOpenSearch:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def search(
+            self,
+            query: str,
+            *,
+            top_n: int = 50,
+            doc_types=None,
+            boost_pricing=False,
+            prefer_snippet=False,
+            page_kinds=None,
+            product_families=None,
+            page_kind_weights=None,
+            product_family_weights=None,
+        ):
+            _ = (query, boost_pricing, prefer_snippet)
+            self.calls.append(
+                {
+                    "page_kinds": list(page_kinds or []),
+                    "product_families": list(product_families or []),
+                    "page_kind_weights": dict(page_kind_weights or {}),
+                    "product_family_weights": dict(product_family_weights or {}),
+                }
+            )
+            return [
+                SearchChunk(
+                    "bm25-1",
+                    "d1",
+                    "Windows VPS order page",
+                    "https://example.com/order/windows-vps",
+                    "pricing",
+                    0.9,
+                    metadata={"page_kind": "order_page", "product_family": "windows_vps"},
+                )
+            ]
+
+    class FakeQdrant:
+        def search(self, *, vector, top_n=50, doc_types=None, page_kinds=None, product_families=None):
+            _ = (vector, top_n, doc_types, page_kinds, product_families)
+            return []
+
+    class FakeEmbedder:
+        async def embed(self, texts):
+            _ = texts
+            return [[0.1, 0.2]]
+
+    class FakeReranker:
+        async def rerank(self, query, chunks, top_k):
+            _ = query
+            ranked = sorted(chunks, key=lambda c: c.score, reverse=True)
+            return [(c, c.score) for c in ranked[:top_k]]
+
+    opensearch = FakeOpenSearch()
+    svc = RetrievalService(
+        opensearch=opensearch,
+        qdrant=FakeQdrant(),
+        embedding_provider=FakeEmbedder(),
+        reranker=FakeReranker(),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_settings",
+        type(
+            "S",
+            (),
+            {
+                "retrieval_top_n": 20,
+                "retrieval_top_k": 4,
+                "retrieval_fusion": "simple",
+                "retrieval_rrf_k": 60,
+                "retrieval_plans_extra_chunks": 4,
+                "retrieval_ensure_doc_type_min": 0,
+                "retrieval_conversation_score_penalty": 0.55,
+                "retrieval_page_kind_weighting_enabled": True,
+                "page_kind_filter_enabled": False,
+                "evidence_selector_use_llm": False,
+                "evidence_selector_fallback_top_k": 4,
+            },
+        )(),
+    )
+
+    plan = RetrievalPlan(
+        profile="pricing_profile",
+        attempt_index=1,
+        reason="test_plan",
+        query_keyword="windows vps order link",
+        query_semantic="windows vps order link",
+        preferred_doc_types=["pricing", "docs"],
+        authoritative_doc_types=["pricing", "docs"],
+        fetch_n=8,
+        rerank_k=4,
+        budget_hint={
+            "preferred_page_kinds": ["order_page", "product_page"],
+            "supporting_page_kinds": ["pricing_table"],
+            "page_kind_weights": {"order_page": 1.45, "product_page": 1.25},
+            "product_family_hints": ["windows_vps"],
+            "product_family_weights": {"windows_vps": 1.2},
+            "demote_doc_types": ["faq", "blog"],
+        },
+    )
+
+    await svc.retrieve("windows vps order link", retrieval_plan=plan)
+
+    first_call = opensearch.calls[0]
+    assert first_call["page_kinds"] == []
+    assert first_call["page_kind_weights"] == {}
+    assert first_call["product_families"] == ["windows_vps"]
+    assert first_call["product_family_weights"] == {"windows_vps": pytest.approx(1.2)}
+
+
+@pytest.mark.asyncio
+async def test_retrieve_relaxes_metadata_filters_when_search_returns_empty(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.archi_config.get_page_kind_filter_enabled",
+        lambda: True,
+    )
+
+    class FakeOpenSearch:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def search(
+            self,
+            query: str,
+            *,
+            top_n: int = 50,
+            doc_types=None,
+            boost_pricing=False,
+            prefer_snippet=False,
+            page_kinds=None,
+            product_families=None,
+            page_kind_weights=None,
+            product_family_weights=None,
+        ):
+            _ = (query, top_n, doc_types, boost_pricing, prefer_snippet, page_kind_weights, product_family_weights)
+            self.calls.append(
+                {
+                    "page_kinds": list(page_kinds or []),
+                    "product_families": list(product_families or []),
+                }
+            )
+            if product_families:
+                return []
+            return [
+                SearchChunk(
+                    "bm25-1",
+                    "d1",
+                    "Windows VPS product page",
+                    "https://example.com/windows-vps",
+                    "docs",
+                    0.8,
+                    metadata={"page_kind": "product_page"},
+                )
+            ]
+
+    class FakeQdrant:
+        def search(self, *, vector, top_n=50, doc_types=None, page_kinds=None, product_families=None):
+            _ = (vector, top_n, doc_types, page_kinds, product_families)
+            return []
+
+    class FakeEmbedder:
+        async def embed(self, texts):
+            _ = texts
+            return [[0.1, 0.2]]
+
+    class FakeReranker:
+        async def rerank(self, query, chunks, top_k):
+            _ = query
+            ranked = sorted(chunks, key=lambda c: c.score, reverse=True)
+            return [(c, c.score) for c in ranked[:top_k]]
+
+    opensearch = FakeOpenSearch()
+    svc = RetrievalService(
+        opensearch=opensearch,
+        qdrant=FakeQdrant(),
+        embedding_provider=FakeEmbedder(),
+        reranker=FakeReranker(),
+    )
+    monkeypatch.setattr(
+        svc,
+        "_settings",
+        type(
+            "S",
+            (),
+            {
+                "retrieval_top_n": 20,
+                "retrieval_top_k": 4,
+                "retrieval_fusion": "simple",
+                "retrieval_rrf_k": 60,
+                "retrieval_plans_extra_chunks": 4,
+                "retrieval_ensure_doc_type_min": 0,
+                "retrieval_conversation_score_penalty": 0.55,
+                "retrieval_page_kind_weighting_enabled": True,
+                "evidence_selector_use_llm": False,
+                "evidence_selector_fallback_top_k": 4,
+            },
+        )(),
+    )
+
+    plan = RetrievalPlan(
+        profile="generic_profile",
+        attempt_index=1,
+        reason="test_plan",
+        query_keyword="windows vps singapore",
+        query_semantic="windows vps singapore",
+        preferred_doc_types=["pricing", "docs", "faq"],
+        authoritative_doc_types=["pricing", "docs"],
+        fetch_n=8,
+        rerank_k=4,
+        budget_hint={
+            "preferred_page_kinds": ["product_page"],
+            "supporting_page_kinds": ["pricing_table"],
+            "page_kind_weights": {"product_page": 1.1},
+            "product_family_hints": ["windows_vps"],
+            "product_family_weights": {"windows_vps": 1.2},
+        },
+    )
+
+    pack = await svc.retrieve("windows vps singapore", retrieval_plan=plan)
+
+    assert pack.chunks
+    assert len(opensearch.calls) >= 2
+    assert opensearch.calls[0]["product_families"] == ["windows_vps"]
+    assert opensearch.calls[1]["product_families"] == []
